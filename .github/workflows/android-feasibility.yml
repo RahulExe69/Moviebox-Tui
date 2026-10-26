@@ -1,0 +1,59 @@
+name: Android ARM64 Feasibility
+
+on:
+  pull_request:
+    paths:
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "src/**"
+      - ".github/workflows/android-feasibility.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: android-feasibility-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  android-arm64-library:
+    name: Compile Rust library for Android ARM64
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install Rust 1.90 and Android target
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.90.0
+          targets: aarch64-linux-android
+
+      - name: Install Android NDK
+        id: ndk
+        uses: nttld/setup-ndk@v1
+        with:
+          ndk-version: r27d
+          add-to-path: false
+
+      - name: Configure Android linker
+        shell: bash
+        env:
+          NDK_PATH: ${{ steps.ndk.outputs.ndk-path }}
+        run: |
+          set -euo pipefail
+          TOOLCHAIN="$NDK_PATH/toolchains/llvm/prebuilt/linux-x86_64/bin"
+          test -x "$TOOLCHAIN/aarch64-linux-android21-clang"
+          echo "$TOOLCHAIN" >> "$GITHUB_PATH"
+          echo "ANDROID_NDK_HOME=$NDK_PATH" >> "$GITHUB_ENV"
+          echo "CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER=$TOOLCHAIN/aarch64-linux-android21-clang" >> "$GITHUB_ENV"
+          echo "CC_aarch64_linux_android=$TOOLCHAIN/aarch64-linux-android21-clang" >> "$GITHUB_ENV"
+          echo "AR_aarch64_linux_android=$TOOLCHAIN/llvm-ar" >> "$GITHUB_ENV"
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          prefix-key: "android-arm64-feasibility"
+
+      - name: Compile library for Android ARM64
+        run: cargo build --locked --target aarch64-linux-android --lib
