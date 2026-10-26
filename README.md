@@ -27,7 +27,7 @@ Provider availability and features vary. Some sources may be unavailable dependi
 
 ## Android app roadmap
 
-The goal is to evolve 7xCinema into an Android-first app without losing its multi-source foundation. The native UI and in-app playback are planned work—not existing features.
+The goal is to evolve 7xCinema into an Android-first app without losing its multi-source foundation. One promising architecture is the on-device backend pattern already used by [7xAnime](https://github.com/RahulExe69/7xAnime): bundle the frontend and backend in the APK, start a loopback-only API on the phone, and contact providers directly without requiring a 7xCinema-owned scraping server. Because MovieBox-TUI's provider engine is Rust rather than Python, we must first prove Android ARM64 compatibility and choose a suitable Rust-to-UI bridge. The native UI and in-app playback are planned work—not existing features.
 
 See [the Android app foundation plan](docs/ANDROID_APP_PLAN.md) for the architecture audit and proposed implementation sequence.
 
