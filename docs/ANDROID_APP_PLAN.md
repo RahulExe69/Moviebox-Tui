@@ -2,61 +2,89 @@
 
 ## Audit result
 
-The current `main` branch is an unmodified source fork of [MovieBox-TUI](https://github.com/mesamirh/MovieBox-Tui). It is a Rust terminal application using Ratatui/Crossterm. Its Android support is **Termux**, where it launches an external player using Android intents; this repository does not currently contain a native Android app module, a Gradle project, an APK packaging workflow, or an Android release target.
+The current `main` branch is a Rust terminal application using Ratatui/Crossterm. Android support is through Termux and external-player hand-off; the repository does not yet contain a native Android app module or APK workflow.
 
-The source is still a useful foundation because provider logic and data models live outside most of the terminal UI:
+However, **7xAnime already demonstrates a viable packaging pattern for this family of apps**. Its Capacitor frontend bundles a Python runtime and FastAPI backend in the APK, starts the API on `127.0.0.1:8000`, and keeps provider requests on-device without requiring us to host our own extraction server. See [RahulExe69/7xAnime](https://github.com/RahulExe69/7xAnime), `android-local-backend/README.md`, `android-local-backend/local_api.py`, and `.github/workflows/7xanime-build.yml`.
 
-- `src/providers/` defines a shared `Provider` trait and common catalog, details, episode, release, playback-source, and subtitle models.
-- `src/service.rs` composes the provider clients and exposes typed search/details and related provider operations.
-- `src/player.rs` is desktop/Termux-specific playback orchestration. It starts external executables or Android intents; a native app should not use this as its in-app playback layer.
-- `src/tui/` contains the Ratatui UI. It should remain the terminal frontend, not become the Android screen implementation.
-- `src/config.rs` and multiple modules use `moviebox-tui` paths and `MOVIEBOX_*` variables; package/app renaming needs a deliberate compatibility plan.
-- `.github/workflows/release.yml` builds desktop targets (Linux, macOS, Windows); it does not package an Android APK.
+We should reuse the *architectural pattern*, not blindly copy its Python implementation. MovieBox-TUI's provider logic is Rust, so the best option is to expose the existing Rust provider service to the bundled UI through a small local API if Android compilation is feasible. That keeps us from rewriting every source adapter in Python.
+
+## What can be reused from 7xAnime
+
+- Capacitor + bundled web frontend to produce a familiar Android APK build pipeline.
+- An on-device API bound only to `127.0.0.1`, with a random per-process token or equivalent request guard.
+- Build-time dependency/provider pruning so the APK includes only selected integrations.
+- Guest/local-first mode for features that do not need accounts or shared sync.
+- A provider allowlist and explicit real-device validation rather than assuming imported providers work.
+- Existing 7x brand/release workflow conventions, adjusted for this repository.
+
+Do **not** assume the 7xAnime Python/Chaquopy backend can run the Rust provider engine directly. It cannot without an additional interface or port. Also do not expose a local API on `0.0.0.0`; it should listen on loopback only.
+
+## Current Rust architecture
+
+- `src/providers/` defines the shared `Provider` trait and common catalog, details, episode, release, playback-source, and subtitle models.
+- `src/service.rs` composes MovieBox, 4KHDHub, BDIX, Dramachi and Stremio add-on clients. It is a promising boundary for a UI-independent API, but it is currently shaped around the terminal app and should be audited before reuse.
+- `src/player.rs` starts external players or Android intents. A native app should use its own in-app playback layer rather than treating this terminal playback orchestration as the Android player.
+- `src/tui/` contains the Ratatui interface and should remain a separate frontend.
+- `src/config.rs` and other modules use `moviebox-tui` paths and `MOVIEBOX_*` environment variables; rename and migration should be deliberate.
+- `Cargo.toml` already declares a Rust library target as well as the terminal binary, which gives us a starting point for a bridge, but does not prove that the full dependency graph compiles for Android.
+- Existing release workflows build desktop binaries; they do not package a native Android APK.
 
 ## Recommended architecture
 
-Keep the existing terminal client functioning while adding a separate Android application. Do not start by globally renaming package identifiers or replacing provider code.
+### Preferred route: local Rust API + Capacitor UI
 
-1. **Protect the baseline.** Keep this work on feature branches and retain upstream attribution and the MIT/Apache licence files.
-2. **Extract/define a UI-independent core boundary.** Make provider search, catalog/details mapping, stream resolution, subtitle metadata, and settings callable without initializing Ratatui or relying on terminal process management. Keep provider clients behind a stable facade. Prefer a small core crate/module rather than duplicating scrapers in Kotlin.
-3. **Prove Android compilation before designing the bridge.** Add an Android ARM64 compile check for the existing core first. Audit transitive native dependencies and filesystem/network assumptions. Do not assume that a Termux-compatible binary can be packaged as an APK.
-4. **Add a native Android app module.** Use Kotlin with Jetpack Compose for the UI. Evaluate a narrow Rust bridge (for example UniFFI/JNI) only after a minimal Android target build succeeds; expose safe, typed operations instead of leaking internal provider structs.
-5. **Use an in-app Android player.** Integrate AndroidX Media3/ExoPlayer for supported streams, with explicit handling for request headers, cookies, subtitle tracks, seek/resume, errors, and download permissions. Keep the old external-player flow for the terminal app.
-6. **Separate app identity from upstream compatibility.** Set a stable application ID such as `com.sevenx.cinema` only once the Android module exists. Migrate local data/config deliberately, keep environment variable aliases for existing terminal users, and update updater/release endpoints, installer scripts, docs, and binary names together.
-7. **Ship only after tests.** Build a signed/unsigned debug APK for ARM64, install it on an emulator or device, and verify search across multiple providers, provider failures, detail/episode navigation, playback, subtitles, history/resume, and offline/error states. Add CI for Android without removing the existing desktop test matrix.
+1. **Prove the Rust core on Android ARM64.** Set up the Android NDK/Cargo toolchain and test the provider/service dependencies without the TUI or desktop-only process code.
+2. **Define a narrow, UI-independent provider facade.** Expose source capabilities, search, details, seasons/episodes, stream candidates, subtitles and diagnostics as typed serializable responses. Isolate Ratatui, terminal I/O, desktop player launching and process management.
+3. **Run a local Rust API on loopback.** If the Rust dependency graph can be built and packaged reliably, provide a small HTTP API bundled in the APK and bind it only to `127.0.0.1`. Start/stop it from a native Capacitor bridge and guard requests with a random per-process token, following the security pattern used in 7xAnime.
+4. **Bundle the frontend with Capacitor.** Use the 7xAnime-style web UI packaging flow, but create a 7xCinema-specific interface and API contract.
+5. **Use in-app playback.** Integrate AndroidX Media3/ExoPlayer or a proven WebView/embed path according to the returned media type. Handle headers, cookies, subtitles, seek/resume, redirects and provider-specific limitations explicitly.
+6. **Keep providers modular.** Use an explicit allowlist, timeouts, per-provider diagnostics, normalized result types and failure isolation. Do not assume every upstream provider is stable or suitable for distribution.
+7. **Preserve terminal functionality.** Keep the existing TUI usable; do not make Android-specific assumptions global to the Rust application.
 
-## First implementation milestones
+### Fallback route: native Rust bridge
 
-### M1 — provider-core boundary
-- Map the smallest public API needed by a UI: source list/capabilities, search, details, releases/streams, and subtitles.
-- Identify terminal-only imports and move them out of the core boundary.
-- Add tests against the public facade and ensure the existing TUI builds and behaves as before.
+If a local HTTP server adds too much APK overhead or process complexity, evaluate a JNI/UniFFI bridge exposing the same narrow facade to a native or Capacitor frontend. Choose only after a minimal Android ARM64 build and a real-device proof of concept.
 
-### M2 — Android build proof
-- Build only the core for Android ARM64 first.
-- Record required NDK/toolchain settings and any unsupported dependencies.
-- Confirm request headers and playback metadata can be passed safely to Kotlin.
+### Last resort: port selected providers
 
-### M3 — native Android shell
-- Create the Gradle app module, Compose navigation, permission/error states, and a basic provider/search screen.
-- Integrate the provider bridge before implementing visual polish.
-- Add Media3 playback and subtitle selection.
+If key Rust dependencies are incompatible with Android, port only selected, reviewed provider adapters into the local Python backend pattern used by 7xAnime. Do not duplicate the entire provider catalogue by default; that would create two implementations to maintain and risks losing the existing Rust engine's behavior.
 
-### M4 — 7xCinema branding and releases
-- Apply the approved 7x brand assets, app name, package ID, icons, theme and versioning.
-- Add APK build artifacts and release checks; preserve the existing licence notices and source attribution.
-- Publish only after real-device smoke tests pass.
+## Implementation milestones
+
+### M1 — feasibility proof
+- Audit `Cargo.toml`, terminal-only imports, networking, TLS/DNS, filesystem use and provider service dependencies.
+- Add an Android ARM64 compile experiment on a feature branch.
+- Confirm which providers can initialize and perform a search from the Android target.
+- Record APK size and runtime constraints before choosing the final bridge.
+
+### M2 — provider-core/API boundary
+- Define stable JSON types and routes for source list, search, details, episodes, stream candidates, subtitles and diagnostics.
+- Ensure one failing provider does not fail an aggregate search.
+- Add timeouts, caching, cancellation and redacted error reporting.
+- Keep local API loopback-only and authenticated with a per-process token.
+
+### M3 — Android shell and playback
+- Add Capacitor/Gradle packaging and a native bridge to start the local Rust service.
+- Build a 7xCinema UI with browse, multi-source search, details, episodes, favourites and watch progress.
+- Add a player that handles direct streams and embeds appropriately; verify actual playback on a physical Android device.
+
+### M4 — branding and release pipeline
+- Apply approved 7x brand assets, application ID, app icon, theme and versioning.
+- Add Android debug APK artifacts and release checks without removing desktop CI.
+- Preserve upstream licence notices and provide a third-party provider attribution inventory.
 
 ## Acceptance criteria for the first native release
 
-- [ ] Builds an installable Android APK; not just a Termux binary.
+- [ ] Produces an installable Android APK, not merely a Termux executable.
+- [ ] Runs provider operations locally in the app process/device; no mandatory 7xCinema-owned scraping server for core browse/search.
 - [ ] Searches at least two independently configured providers and isolates provider errors.
-- [ ] Opens details and episode lists where the provider supports them.
-- [ ] Plays supported streams in-app with request headers and subtitles correctly handled.
+- [ ] Opens details and episodes where supported.
+- [ ] Plays supported streams in-app with required request headers and subtitles handled.
 - [ ] Persists favourites and watch progress locally.
-- [ ] Does not claim that every provider or stream is guaranteed to work.
-- [ ] Preserves applicable upstream licences and identifies lawful, authorised source use as the user's responsibility.
+- [ ] Binds any local API to loopback only and protects requests.
+- [ ] Documents provider limitations and does not claim all sources are guaranteed to work.
+- [ ] Preserves applicable upstream licences and only distributes authorised integrations.
 
 ## Scope and safety note
 
-A provider integration is a connector to a third-party service, not permission to redistribute its content. Only configure and distribute provider integrations and stream access that are authorised for the intended use. This plan does not assume that every community provider is reliable, lawful in every region, or suitable for inclusion in a public release.
+A provider integration is a connector to a third-party service, not permission to redistribute its content. Only configure and distribute provider integrations and stream access that are authorised for the intended use. Community providers can be unreliable, region-dependent, or unsuitable for public distribution. Test the actual playback path before treating a provider as supported.
