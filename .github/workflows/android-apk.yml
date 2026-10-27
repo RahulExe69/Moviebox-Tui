@@ -1,6 +1,17 @@
 name: 7xCinema Android APK
 
 on:
+  push:
+    branches:
+      - feat/7xcinema-android-foundation
+    paths:
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "src/**"
+      - "mobile/**"
+      - "android-local-backend/**"
+      - ".github/scripts/configure-7xcinema-android.py"
+      - ".github/workflows/android-apk.yml"
   pull_request:
     paths:
       - "Cargo.toml"
