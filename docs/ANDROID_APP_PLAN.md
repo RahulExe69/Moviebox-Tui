@@ -16,7 +16,7 @@ We should reuse the *architectural pattern*, not blindly copy its Python impleme
 - `src/mobile_server.rs` exposes the facade through an authenticated HTTP API bound to loopback only, with a JSON body limit, bounded concurrent connections and a small route allowlist.
 - `src/android_jni.rs` and a native Capacitor plugin connect Android to the Rust server. The bridge returns a per-process token and ephemeral loopback port without logging the token.
 - `mobile/` contains a React + TypeScript search/details shell, and `.github/workflows/android-apk.yml` builds an arm64 debug APK and uploads it as a workflow artifact.
-- The Android packaging path is being validated by CI; playback and physical-device testing remain future milestones. No verified installable APK is claimed yet.
+- The Android packaging workflow has successfully produced an ARM64 debug APK artifact (build job green). The APK has not yet been installed and exercised on a physical Android device; playback and device-level provider testing remain future milestones.
 
 ## What can be reused from 7xAnime
 
