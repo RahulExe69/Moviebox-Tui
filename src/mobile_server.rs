@@ -176,7 +176,7 @@ struct HealthResponse {
 
 #[derive(Debug, Serialize)]
 struct ErrorResponse {
-    error: &'static str,
+    error: String,
 }
 
 async fn handle_request(
@@ -340,6 +340,14 @@ async fn read_json<T: DeserializeOwned>(body: Incoming) -> Result<T, ()> {
 
 fn api_error_response(error: MobileApiError, origin: Option<&str>) -> Response<Full<Bytes>> {
     let (status, message) = match error {
+        MobileApiError::PlaybackProvider { provider, error } => {
+            let status = match error {
+                ProviderError::NotFound => StatusCode::NOT_FOUND,
+                ProviderError::RateLimited(_) => StatusCode::TOO_MANY_REQUESTS,
+                _ => StatusCode::BAD_GATEWAY,
+            };
+            return error_response(status, error.user_message(provider), origin);
+        }
         MobileApiError::UnknownProvider(_) => (StatusCode::BAD_REQUEST, "Unknown provider"),
         MobileApiError::EmptyQuery => (StatusCode::BAD_REQUEST, "Search query must not be empty"),
         MobileApiError::EmptyMediaId => (StatusCode::BAD_REQUEST, "Media ID must not be empty"),
@@ -392,10 +400,10 @@ fn json_response<T: Serialize>(
 
 fn error_response(
     status: StatusCode,
-    message: &'static str,
+    message: impl Into<String>,
     origin: Option<&str>,
 ) -> Response<Full<Bytes>> {
-    json_response(status, &ErrorResponse { error: message }, origin)
+    json_response(status, &ErrorResponse { error: message.into() }, origin)
 }
 
 fn empty_response(status: StatusCode, origin: Option<&str>) -> Response<Full<Bytes>> {
