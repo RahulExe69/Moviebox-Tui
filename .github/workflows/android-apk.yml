@@ -1,0 +1,103 @@
+name: 7xCinema Android APK
+
+on:
+  pull_request:
+    paths:
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "src/**"
+      - "mobile/**"
+      - "android-local-backend/**"
+      - ".github/scripts/configure-7xcinema-android.py"
+      - ".github/workflows/android-apk.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: 7xcinema-android-apk-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  debug-apk:
+    name: Build arm64 debug APK
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust 1.90 and Android target
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.90.0
+          targets: aarch64-linux-android
+
+      - name: Install Android NDK
+        id: ndk
+        uses: nttld/setup-ndk@v1
+        with:
+          ndk-version: r27d
+          add-to-path: false
+
+      - name: Configure Android linker
+        shell: bash
+        env:
+          NDK_PATH: ${{ steps.ndk.outputs.ndk-path }}
+        run: |
+          set -euo pipefail
+          TOOLCHAIN="$NDK_PATH/toolchains/llvm/prebuilt/linux-x86_64/bin"
+          test -x "$TOOLCHAIN/aarch64-linux-android21-clang"
+          echo "$TOOLCHAIN" >> "$GITHUB_PATH"
+          echo "ANDROID_NDK_HOME=$NDK_PATH" >> "$GITHUB_ENV"
+          echo "CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER=$TOOLCHAIN/aarch64-linux-android21-clang" >> "$GITHUB_ENV"
+          echo "CC_aarch64_linux_android=$TOOLCHAIN/aarch64-linux-android21-clang" >> "$GITHUB_ENV"
+          echo "AR_aarch64_linux_android=$TOOLCHAIN/llvm-ar" >> "$GITHUB_ENV"
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Setup Java 21
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Build Rust ARM64 shared library
+        run: cargo build --locked --release --target aarch64-linux-android --lib
+
+      - name: Build the mobile frontend
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd mobile
+          npm install --no-audit --no-fund
+          npm run build
+          npx cap add android
+          npx cap sync android
+
+      - name: Wire native backend and Rust shared library
+        run: python3 .github/scripts/configure-7xcinema-android.py
+
+      - name: Assemble debug APK
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd mobile/android
+          ./gradlew --no-daemon assembleDebug
+          mkdir -p ../../artifacts
+          cp app/build/outputs/apk/debug/app-debug.apk ../../artifacts/7xCinema-debug-arm64.apk
+
+      - name: Upload debug APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: 7xCinema-debug-arm64
+          path: artifacts/7xCinema-debug-arm64.apk
+          if-no-files-found: error
+          retention-days: 14

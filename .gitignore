@@ -22,3 +22,6 @@ dist/
 book/
 docs/changelog.md
 docs/contributing.md
+/mobile/node_modules/
+/mobile/android/
+/mobile/package-lock.json

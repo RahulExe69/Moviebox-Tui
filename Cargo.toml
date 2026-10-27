@@ -68,6 +68,7 @@ tempfile = "3.17.1"
 [lib]
 name = "moviebox_tui"
 path = "src/lib.rs"
+crate-type = ["rlib", "cdylib"]
 
 [lints.clippy]
 collapsible_else_if = "allow"
