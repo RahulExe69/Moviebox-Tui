@@ -13,7 +13,10 @@ We should reuse the *architectural pattern*, not blindly copy its Python impleme
 - The Android ARM64 feasibility workflow has passed for the existing Rust library at the initial implementation baseline. This established cross-compilation feasibility, not runtime correctness or APK readiness.
 - `src/mobile_api.rs` now defines a transport-independent `MobileApi` facade for provider discovery, typed search, details and MovieBox homepage data. It reuses the existing `MovieBoxService` and serializable models rather than duplicating provider logic.
 - The facade validates blank query/ID/tab inputs, normalizes provider IDs through the existing parser, clamps requested pages and reports whether the optional 4KHDHub client initialized.
-- CI and Android ARM64 compilation are being rerun against the facade commit. The facade is not yet an HTTP server, JNI bridge or APK; those remain future milestones.
+- `src/mobile_server.rs` exposes the facade through an authenticated HTTP API bound to loopback only, with a JSON body limit, bounded concurrent connections and a small route allowlist.
+- `src/android_jni.rs` and a native Capacitor plugin connect Android to the Rust server. The bridge returns a per-process token and ephemeral loopback port without logging the token.
+- `mobile/` contains a React + TypeScript search/details shell, and `.github/workflows/android-apk.yml` builds an arm64 debug APK and uploads it as a workflow artifact.
+- The Android packaging path is being validated by CI; playback and physical-device testing remain future milestones. No verified installable APK is claimed yet.
 
 ## What can be reused from 7xAnime
 
