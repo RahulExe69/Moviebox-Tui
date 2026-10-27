@@ -11,12 +11,13 @@ We should reuse the *architectural pattern*, not blindly copy its Python impleme
 ## Implementation status on the feature branch
 
 - The Android ARM64 feasibility workflow has passed for the existing Rust library at the initial implementation baseline. This established cross-compilation feasibility, not runtime correctness or APK readiness.
-- `src/mobile_api.rs` now defines a transport-independent `MobileApi` facade for provider discovery, typed search, details and MovieBox homepage data. It reuses the existing `MovieBoxService` and serializable models rather than duplicating provider logic.
+- `src/mobile_api.rs` defines a transport-independent `MobileApi` facade for provider discovery, typed search, details, MovieBox homepage data, playback-source discovery and selected-source resolution. It reuses the existing `MovieBoxService` and serializable models rather than duplicating provider logic.
 - The facade validates blank query/ID/tab inputs, normalizes provider IDs through the existing parser, clamps requested pages and reports whether the optional 4KHDHub client initialized.
 - `src/mobile_server.rs` exposes the facade through an authenticated HTTP API bound to loopback only, with a JSON body limit, bounded concurrent connections and a small route allowlist.
 - `src/android_jni.rs` and a native Capacitor plugin connect Android to the Rust server. The bridge returns a per-process token and ephemeral loopback port without logging the token.
-- `mobile/` contains a React + TypeScript search/details shell, and `.github/workflows/android-apk.yml` builds an arm64 debug APK and uploads it as a workflow artifact.
-- The Android packaging workflow has successfully produced an ARM64 debug APK artifact (build job green). The APK has not yet been installed and exercised on a physical Android device; playback and device-level provider testing remain future milestones.
+- `mobile/` contains the React + TypeScript search/details shell plus source listing, subtitle selection, and a play action that requests a resolved source from the local API.
+- The native Capacitor bridge now opens a dedicated AndroidX Media3/ExoPlayer activity with provider request headers and supported external subtitle formats; the packaging script adds Media3 dependencies and registers the activity in the generated Android manifest.
+- The ARM64 debug APK workflow has produced an artifact, and the user has confirmed their APK install/smoke test passed. The current playback implementation still needs a fresh APK build and a real stream playback test on a physical Android device; provider-by-provider success is not yet verified.
 
 ## What can be reused from 7xAnime
 
@@ -47,7 +48,7 @@ Do **not** assume the 7xAnime Python/Chaquopy backend can run the Rust provider 
 2. **Define a narrow, UI-independent provider facade.** Expose source capabilities, search, details, seasons/episodes, stream candidates, subtitles and diagnostics as typed serializable responses. Isolate Ratatui, terminal I/O, desktop player launching and process management.
 3. **Run a local Rust API on loopback.** If the Rust dependency graph can be built and packaged reliably, provide a small HTTP API bundled in the APK and bind it only to `127.0.0.1`. Start/stop it from a native Capacitor bridge and guard requests with a random per-process token, following the security pattern used in 7xAnime.
 4. **Bundle the frontend with Capacitor.** Use the 7xAnime-style web UI packaging flow, but create a 7xCinema-specific interface and API contract.
-5. **Use in-app playback.** Integrate AndroidX Media3/ExoPlayer or a proven WebView/embed path according to the returned media type. Handle headers, cookies, subtitles, seek/resume, redirects and provider-specific limitations explicitly.
+5. **Use in-app playback.** AndroidX Media3/ExoPlayer is now wired to play resolved direct streams with request headers and supported external subtitles. Next verify real streams, seek/resume, redirects and provider-specific limitations on device; embeds and unsupported stream types need explicit fallback handling.
 6. **Keep providers modular.** Use an explicit allowlist, timeouts, per-provider diagnostics, normalized result types and failure isolation. Do not assume every upstream provider is stable or suitable for distribution.
 7. **Preserve terminal functionality.** Keep the existing TUI usable; do not make Android-specific assumptions global to the Rust application.
 
