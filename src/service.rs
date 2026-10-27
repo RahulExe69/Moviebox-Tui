@@ -2,11 +2,11 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use crate::models::BrowseMetrics;
-use crate::providers::Provider;
+use crate::providers::{Provider, ReleaseProvider};
 use crate::providers::bdix::circleftp::CircleFtpClient;
 use crate::providers::bdix::dhakaflix::client::DhakaFlixClient;
 use crate::providers::fourkhdhub::FourKHdHubClient;
-use crate::providers::models::{CatalogItem, MediaDetails, ProviderError, ProviderKind};
+use crate::providers::models::{CatalogItem, MediaDetails, ProviderError, ProviderKind, Release};
 use crate::providers::moviebox::client::MovieBoxClient;
 
 #[derive(Clone)]
@@ -159,6 +159,76 @@ impl MovieBoxService {
             ProviderKind::Addons => Provider::details(&self.addon_client, subject_id).await,
             ProviderKind::Dramachi => Provider::details(&self.dramachi_client, subject_id).await,
         }
+    }
+
+
+    /// Load playable releases using the same provider paths as the terminal UI.
+    /// This returns candidate releases and their mirror metadata; resolving a
+    /// provider-specific embed is a separate, on-demand operation.
+    pub async fn releases_typed(
+        &self,
+        provider: ProviderKind,
+        subject_id: &str,
+        season: usize,
+        episode: usize,
+    ) -> Result<Vec<Release>, ProviderError> {
+        let releases = match provider {
+            ProviderKind::MovieBox => {
+                ReleaseProvider::episode_streams(&self.client, subject_id, season, episode).await?
+            }
+            ProviderKind::FourKHdHub => {
+                let client = self.fourk_client.as_ref().ok_or_else(|| {
+                    ProviderError::Unavailable("4KHDHub is unavailable".to_string())
+                })?;
+                ReleaseProvider::episode_streams(client, subject_id, season, episode).await?
+            }
+            ProviderKind::BdixCircleFtp => {
+                ReleaseProvider::episode_streams(&self.circleftp_client, subject_id, season, episode).await?
+            }
+            ProviderKind::BdixDhakaFlix => {
+                ReleaseProvider::episode_streams(&self.dhakaflix_client, subject_id, season, episode).await?
+            }
+            ProviderKind::Dramachi => {
+                ReleaseProvider::episode_streams(&self.dramachi_client, subject_id, season, episode).await?
+            }
+            ProviderKind::Addons => {
+                let addons = tokio::task::spawn_blocking(crate::config::load_addons)
+                    .await
+                    .unwrap_or_default();
+                if !addons.iter().any(|addon| addon.enabled && addon.provides_stream) {
+                    return Err(ProviderError::Unavailable(
+                        "No stream addons enabled. Configure a stream addon first.".to_string(),
+                    ));
+                }
+                let is_series = self
+                    .details_typed(provider, subject_id)
+                    .await
+                    .map(|details| details.is_series())
+                    .unwrap_or_else(|_| {
+                        subject_id.to_ascii_lowercase().starts_with("series:")
+                            || season > 0
+                            || episode > 0
+                    });
+                let (releases, _blocked_addons) =
+                    crate::providers::addons::aggregate_streams(
+                        &self.addon_client,
+                        &addons,
+                        subject_id,
+                        season,
+                        episode,
+                        is_series,
+                    )
+                    .await;
+                releases
+            }
+        };
+
+        if releases.is_empty() {
+            return Err(ProviderError::Unavailable(
+                "No stream sources available".to_string(),
+            ));
+        }
+        Ok(releases)
     }
 
     pub async fn homepage(
