@@ -37,6 +37,20 @@ export interface MobilePlaybackResponse {
   releases: PlaybackRelease[];
   subtitles: SubtitleOption[];
 }
+export interface ResolvedPlaybackSource {
+  provider: string;
+  url: string;
+  headers: Array<[string, string]>;
+  subtitle?: string | null;
+  source_label: string;
+  max_height?: number | null;
+}
+export interface NativePlayerOptions {
+  url: string;
+  title: string;
+  headers: Record<string, string>;
+  subtitleUrl?: string;
+}
 export interface MediaDetails {
   id: { provider: string; value: string };
   title: string;
@@ -53,9 +67,16 @@ export interface MediaDetails {
   seasons: Array<{ number: number; episodes: Array<{ season: number; number: number; title?: string | null; overview?: string | null }> }>;
   dubs: Array<{ subject_id: string; language: string; label: string }>;
 }
-interface NativeBackendPlugin { start(): Promise<BackendConnection>; stop(): Promise<void>; }
+interface NativeBackendPlugin { start(): Promise<BackendConnection>; stop(): Promise<void>; playVideo(options: NativePlayerOptions): Promise<void>; }
 
 const NativeBackend = registerPlugin<NativeBackendPlugin>("MobileBackend");
+export async function playInNativePlayer(options: NativePlayerOptions): Promise<void> {
+  if (!Capacitor.isNativePlatform()) {
+    throw new Error("In-app playback is available in the installed Android app.");
+  }
+  await NativeBackend.playVideo(options);
+}
+
 let connectionPromise: Promise<BackendConnection> | null = null;
 export function resetConnection(): void { connectionPromise = null; }
 
