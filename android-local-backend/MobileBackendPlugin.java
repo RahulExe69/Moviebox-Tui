@@ -5,6 +5,8 @@ import com.getcapacitor.Plugin;
 import com.getcapacitor.PluginCall;
 import com.getcapacitor.PluginMethod;
 import com.getcapacitor.annotation.CapacitorPlugin;
+import android.content.Intent;
+import android.net.Uri;
 import org.json.JSONObject;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -37,6 +39,48 @@ public final class MobileBackendPlugin extends Plugin {
                 call.reject("Could not start the on-device 7xCinema service.", error);
             } catch (LinkageError error) {
                 call.reject("The Rust engine is missing from this APK. Rebuild the Android package.");
+            }
+        });
+    }
+
+
+    @PluginMethod
+    public void playVideo(PluginCall call) {
+        String url = call.getString("url");
+        if (url == null || url.trim().isEmpty()) {
+            call.reject("A playback URL is required.");
+            return;
+        }
+        Uri uri = Uri.parse(url.trim());
+        String scheme = uri.getScheme();
+        if (uri.getHost() == null || !("http".equalsIgnoreCase(scheme) || "https".equalsIgnoreCase(scheme))) {
+            call.reject("Only HTTP and HTTPS playback URLs are supported.");
+            return;
+        }
+
+        String title = call.getString("title", "7xCinema");
+        String subtitleUrl = call.getString("subtitleUrl");
+        JSObject headers = call.getObject("headers");
+        Intent intent = new Intent(getActivity(), PlayerActivity.class);
+        intent.putExtra("media_url", url.trim());
+        intent.putExtra("media_title", title == null ? "7xCinema" : title);
+        intent.putExtra("media_headers", headers == null ? "{}" : headers.toString());
+        if (subtitleUrl != null && !subtitleUrl.trim().isEmpty()) {
+            Uri subtitle = Uri.parse(subtitleUrl.trim());
+            String subtitleScheme = subtitle.getScheme();
+            if (subtitle.getHost() == null || !("http".equalsIgnoreCase(subtitleScheme) || "https".equalsIgnoreCase(subtitleScheme))) {
+                call.reject("Only HTTP and HTTPS subtitle URLs are supported.");
+                return;
+            }
+            intent.putExtra("subtitle_url", subtitleUrl.trim());
+        }
+
+        getActivity().runOnUiThread(() -> {
+            try {
+                getActivity().startActivity(intent);
+                call.resolve();
+            } catch (RuntimeException error) {
+                call.reject("Could not open the 7xCinema player.");
             }
         });
     }
