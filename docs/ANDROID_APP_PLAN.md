@@ -8,6 +8,13 @@ However, **7xAnime already demonstrates a viable packaging pattern for this fami
 
 We should reuse the *architectural pattern*, not blindly copy its Python implementation. MovieBox-TUI's provider logic is Rust, so the best option is to expose the existing Rust provider service to the bundled UI through a small local API if Android compilation is feasible. That keeps us from rewriting every source adapter in Python.
 
+## Implementation status on the feature branch
+
+- The Android ARM64 feasibility workflow has passed for the existing Rust library at the initial implementation baseline. This established cross-compilation feasibility, not runtime correctness or APK readiness.
+- `src/mobile_api.rs` now defines a transport-independent `MobileApi` facade for provider discovery, typed search, details and MovieBox homepage data. It reuses the existing `MovieBoxService` and serializable models rather than duplicating provider logic.
+- The facade validates blank query/ID/tab inputs, normalizes provider IDs through the existing parser, clamps requested pages and reports whether the optional 4KHDHub client initialized.
+- CI and Android ARM64 compilation are being rerun against the facade commit. The facade is not yet an HTTP server, JNI bridge or APK; those remain future milestones.
+
 ## What can be reused from 7xAnime
 
 - Capacitor + bundled web frontend to produce a familiar Android APK build pipeline.
