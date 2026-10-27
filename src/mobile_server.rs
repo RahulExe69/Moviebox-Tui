@@ -350,9 +350,10 @@ fn api_error_response(error: MobileApiError, origin: Option<&str>) -> Response<F
             StatusCode::BAD_REQUEST,
             "Choose either a movie or a specific season and episode",
         ),
-        MobileApiError::InvalidReleaseIndex => {
-            (StatusCode::BAD_REQUEST, "Playback release index is out of range")
-        }
+        MobileApiError::InvalidReleaseIndex => (
+            StatusCode::BAD_REQUEST,
+            "Playback release index is out of range",
+        ),
         MobileApiError::InvalidSubtitleIndex => {
             (StatusCode::BAD_REQUEST, "Subtitle index is out of range")
         }
