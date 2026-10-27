@@ -24,7 +24,7 @@ use thiserror::Error;
 use tokio::net::TcpListener;
 use tokio::sync::Semaphore;
 
-use crate::mobile_api::{MobileApi, MobileApiError, MOBILE_API_VERSION};
+use crate::mobile_api::{MOBILE_API_VERSION, MobileApi, MobileApiError};
 use crate::providers::models::ProviderError;
 
 const TOKEN_HEADER: &str = "x-7xcinema-token";
@@ -109,9 +109,7 @@ pub async fn start_loopback(
                 let service = service_fn(move |request| {
                     let api = api.clone();
                     let token = token.clone();
-                    async move {
-                        Ok::<_, Infallible>(handle_request(request, api, token).await)
-                    }
+                    async move { Ok::<_, Infallible>(handle_request(request, api, token).await) }
                 });
                 let builder = hyper::server::conn::http1::Builder::new();
                 let connection = builder.serve_connection(io, service);
@@ -123,10 +121,7 @@ pub async fn start_loopback(
     Ok(MobileServerHandle { local_addr, task })
 }
 
-fn validate_server_config(
-    address: SocketAddr,
-    token: &str,
-) -> Result<(), MobileServerError> {
+fn validate_server_config(address: SocketAddr, token: &str) -> Result<(), MobileServerError> {
     if !address.ip().is_loopback() {
         return Err(MobileServerError::NonLoopbackAddress);
     }
@@ -172,13 +167,18 @@ async fn handle_request(
         .and_then(|value| value.to_str().ok())
         .map(str::to_owned);
 
-    if origin.as_deref().is_some_and(|value| !is_allowed_origin(value)) {
+    if origin
+        .as_deref()
+        .is_some_and(|value| !is_allowed_origin(value))
+    {
         return error_response(StatusCode::FORBIDDEN, "Origin not allowed", None);
     }
 
     if request.method() == Method::OPTIONS {
         return match origin.as_deref() {
-            Some(value) if is_allowed_origin(value) => empty_response(StatusCode::NO_CONTENT, Some(value)),
+            Some(value) if is_allowed_origin(value) => {
+                empty_response(StatusCode::NO_CONTENT, Some(value))
+            }
             _ => error_response(StatusCode::FORBIDDEN, "Origin not allowed", None),
         };
     }
@@ -221,7 +221,13 @@ async fn handle_request(
         (Method::POST, "/api/v1/search") => {
             let payload = match read_json::<SearchRequest>(request.into_body()).await {
                 Ok(payload) => payload,
-                Err(()) => return error_response(StatusCode::BAD_REQUEST, "Invalid JSON request", origin.as_deref()),
+                Err(()) => {
+                    return error_response(
+                        StatusCode::BAD_REQUEST,
+                        "Invalid JSON request",
+                        origin.as_deref(),
+                    );
+                }
             };
             match api
                 .search(&payload.provider, &payload.query, payload.page.unwrap_or(1))
@@ -234,7 +240,13 @@ async fn handle_request(
         (Method::POST, "/api/v1/details") => {
             let payload = match read_json::<DetailsRequest>(request.into_body()).await {
                 Ok(payload) => payload,
-                Err(()) => return error_response(StatusCode::BAD_REQUEST, "Invalid JSON request", origin.as_deref()),
+                Err(()) => {
+                    return error_response(
+                        StatusCode::BAD_REQUEST,
+                        "Invalid JSON request",
+                        origin.as_deref(),
+                    );
+                }
             };
             match api.details(&payload.provider, &payload.media_id).await {
                 Ok(details) => json_response(StatusCode::OK, &details, origin.as_deref()),
@@ -253,19 +265,21 @@ async fn read_json<T: DeserializeOwned>(body: Incoming) -> Result<T, ()> {
     serde_json::from_slice(&collected.to_bytes()).map_err(|_| ())
 }
 
-fn api_error_response(
-    error: MobileApiError,
-    origin: Option<&str>,
-) -> Response<Full<Bytes>> {
+fn api_error_response(error: MobileApiError, origin: Option<&str>) -> Response<Full<Bytes>> {
     let (status, message) = match error {
         MobileApiError::UnknownProvider(_) => (StatusCode::BAD_REQUEST, "Unknown provider"),
         MobileApiError::EmptyQuery => (StatusCode::BAD_REQUEST, "Search query must not be empty"),
         MobileApiError::EmptyMediaId => (StatusCode::BAD_REQUEST, "Media ID must not be empty"),
-        MobileApiError::EmptyTabId => (StatusCode::BAD_REQUEST, "Homepage tab ID must not be empty"),
-        MobileApiError::Provider(ProviderError::NotFound) => (StatusCode::NOT_FOUND, "No results found"),
-        MobileApiError::Provider(ProviderError::RateLimited(_)) => {
-            (StatusCode::TOO_MANY_REQUESTS, "Provider rate limited the request")
+        MobileApiError::EmptyTabId => {
+            (StatusCode::BAD_REQUEST, "Homepage tab ID must not be empty")
         }
+        MobileApiError::Provider(ProviderError::NotFound) => {
+            (StatusCode::NOT_FOUND, "No results found")
+        }
+        MobileApiError::Provider(ProviderError::RateLimited(_)) => (
+            StatusCode::TOO_MANY_REQUESTS,
+            "Provider rate limited the request",
+        )
         MobileApiError::Provider(_) => (StatusCode::BAD_GATEWAY, "Provider request failed"),
         MobileApiError::Service(_) => (StatusCode::BAD_GATEWAY, "Homepage request failed"),
     };
@@ -278,8 +292,17 @@ fn json_response<T: Serialize>(
     origin: Option<&str>,
 ) -> Response<Full<Bytes>> {
     match serde_json::to_vec(payload) {
-        Ok(bytes) => response(status, Bytes::from(bytes), Some("application/json; charset=utf-8"), origin),
-        Err(_) => error_response(StatusCode::INTERNAL_SERVER_ERROR, "Response serialization failed", origin),
+        Ok(bytes) => response(
+            status,
+            Bytes::from(bytes),
+            Some("application/json; charset=utf-8"),
+            origin,
+        ),
+        Err(_) => error_response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "Response serialization failed",
+            origin,
+        ),
     }
 }
 
@@ -291,10 +314,7 @@ fn error_response(
     json_response(status, &ErrorResponse { error: message }, origin)
 }
 
-fn empty_response(
-    status: StatusCode,
-    origin: Option<&str>,
-) -> Response<Full<Bytes>> {
+fn empty_response(status: StatusCode, origin: Option<&str>) -> Response<Full<Bytes>> {
     response(status, Bytes::new(), None, origin)
 }
 
@@ -318,7 +338,10 @@ fn response(
         }
         builder = builder
             .header(ACCESS_CONTROL_ALLOW_METHODS, "GET, POST, OPTIONS")
-            .header(ACCESS_CONTROL_ALLOW_HEADERS, "Content-Type, X-7xCinema-Token");
+            .header(
+                ACCESS_CONTROL_ALLOW_HEADERS,
+                "Content-Type, X-7xCinema-Token",
+            );
     }
 
     builder
@@ -381,7 +404,10 @@ mod tests {
 
     #[test]
     fn decodes_query_parameters() {
-        assert_eq!(query_value("tab=home&page=2", "tab").as_deref(), Some("home"));
+        assert_eq!(
+            query_value("tab=home&page=2", "tab").as_deref(),
+            Some("home")
+        );
         assert_eq!(query_value("tab=home&page=2", "page").as_deref(), Some("2"));
         assert_eq!(query_value("tab=home&page=2", "missing"), None);
     }
