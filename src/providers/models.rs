@@ -362,6 +362,10 @@ impl ProviderError {
                 let trimmed = msg.trim();
                 if let Some(status) = trimmed.strip_prefix("HTTP status ") {
                     format!("{label} error ({status}).")
+                } else if trimmed.eq_ignore_ascii_case("No stream sources available") {
+                    format!("No playable streams were found for this episode on {label}.")
+                } else if trimmed.eq_ignore_ascii_case("All hosts exhausted") {
+                    format!("{label}'s streaming service could not be reached. Try again later.")
                 } else if trimmed.is_empty() {
                     format!("{label} unavailable.")
                 } else {
