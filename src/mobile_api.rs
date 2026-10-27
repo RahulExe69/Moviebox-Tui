@@ -12,7 +12,7 @@ use thiserror::Error;
 use crate::models::BrowseMetrics;
 use crate::providers::ProviderCapabilities;
 use crate::providers::models::{
-    CatalogItem, MediaDetails, ProviderError, ProviderKind, Release, SubtitleOption,
+    CatalogItem, MediaDetails, PlaybackSource, ProviderError, ProviderKind, Release, SubtitleOption,
 };
 use crate::service::MovieBoxService;
 
@@ -63,6 +63,10 @@ pub enum MobileApiError {
         "Choose either a movie (season and episode both zero) or a specific season and episode"
     )]
     InvalidEpisodeSelection,
+    #[error("Playback release index is out of range")]
+    InvalidReleaseIndex,
+    #[error("Subtitle index is out of range")]
+    InvalidSubtitleIndex,
     #[error(transparent)]
     Provider(#[from] ProviderError),
     #[error("{0}")]
@@ -203,6 +207,51 @@ impl MobileApi {
             releases,
             subtitles,
         })
+    }
+
+    /// Resolve a selected release by index from the current provider response.
+    /// This deliberately accepts no arbitrary URL from the client.
+    pub async fn resolve_playback(
+        &self,
+        provider: &str,
+        media_id: &str,
+        season: usize,
+        episode: usize,
+        release_index: usize,
+        subtitle_index: Option<usize>,
+    ) -> Result<PlaybackSource, MobileApiError> {
+        let candidates = self
+            .playback_sources(provider, media_id, season, episode)
+            .await?;
+        let release = candidates
+            .releases
+            .get(release_index)
+            .ok_or(MobileApiError::InvalidReleaseIndex)?;
+        let mut source = self
+            .service
+            .resolve_release_typed(candidates.provider, release)
+            .await
+            .map_err(MobileApiError::from)?;
+
+        if let Some(index) = subtitle_index {
+            let subtitle = candidates
+                .subtitles
+                .get(index)
+                .ok_or(MobileApiError::InvalidSubtitleIndex)?;
+            let parsed = url::Url::parse(&subtitle.url).map_err(|_| {
+                MobileApiError::Provider(ProviderError::Unavailable(
+                    "Provider returned an invalid subtitle URL".to_string(),
+                ))
+            })?;
+            if !matches!(parsed.scheme(), "http" | "https") || parsed.host_str().is_none() {
+                return Err(MobileApiError::Provider(ProviderError::Unavailable(
+                    "Only HTTP and HTTPS subtitle URLs are supported".to_string(),
+                )));
+            }
+            source.subtitle = Some(subtitle.url.clone());
+        }
+
+        Ok(source)
     }
 
     pub async fn homepage(
