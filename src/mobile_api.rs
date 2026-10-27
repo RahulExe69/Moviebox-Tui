@@ -313,4 +313,14 @@ mod tests {
         let error = api.details("moviebox", "  ").await.unwrap_err();
         assert!(matches!(error, MobileApiError::EmptyMediaId));
     }
+
+    #[tokio::test]
+    async fn rejects_partial_episode_selection_before_provider_access() {
+        let api = MobileApi::new();
+        let error = api
+            .playback_sources("moviebox", "valid-id", 1, 0)
+            .await
+            .unwrap_err();
+        assert!(matches!(error, MobileApiError::InvalidEpisodeSelection));
+    }
 }
