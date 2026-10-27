@@ -10,8 +10,8 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use crate::models::BrowseMetrics;
-use crate::providers::models::{CatalogItem, MediaDetails, ProviderError, ProviderKind};
 use crate::providers::ProviderCapabilities;
+use crate::providers::models::{CatalogItem, MediaDetails, ProviderError, ProviderKind};
 use crate::service::MovieBoxService;
 
 /// Version of the mobile-facing contract. Bump only when the public contract changes.
