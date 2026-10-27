@@ -24,7 +24,7 @@ use thiserror::Error;
 use tokio::net::TcpListener;
 use tokio::sync::Semaphore;
 
-use crate::mobile_api::{MobileApi, MobileApiError, MobileProvider, MOBILE_API_VERSION};
+use crate::mobile_api::{MobileApi, MobileApiError, MOBILE_API_VERSION};
 use crate::providers::models::ProviderError;
 
 const TOKEN_HEADER: &str = "x-7xcinema-token";
