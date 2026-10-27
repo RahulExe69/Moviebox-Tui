@@ -67,6 +67,11 @@ pub enum MobileApiError {
     InvalidReleaseIndex,
     #[error("Subtitle index is out of range")]
     InvalidSubtitleIndex,
+    #[error("{error}")]
+    PlaybackProvider {
+        provider: ProviderKind,
+        error: ProviderError,
+    },
     #[error(transparent)]
     Provider(#[from] ProviderError),
     #[error("{0}")]
@@ -174,7 +179,7 @@ impl MobileApi {
             .service
             .releases_typed(provider, media_id, season, episode)
             .await
-            .map_err(MobileApiError::from)?;
+            .map_err(|error| MobileApiError::PlaybackProvider { provider, error })?;
 
         // Caption lookup is best-effort: a subtitle service failure must not
         // prevent the user from seeing available video releases.
@@ -231,7 +236,10 @@ impl MobileApi {
             .service
             .resolve_release_typed(candidates.provider, release)
             .await
-            .map_err(MobileApiError::from)?;
+            .map_err(|error| MobileApiError::PlaybackProvider {
+                provider: candidates.provider,
+                error,
+            })?;
 
         if let Some(index) = subtitle_index {
             let subtitle = candidates
