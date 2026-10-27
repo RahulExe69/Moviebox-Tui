@@ -139,7 +139,8 @@ impl crate::providers::ReleaseProvider for client::MovieBoxClient {
         // filtering, retry the legacy paged endpoint once before failing.
         if releases.is_empty() && !legacy_fallback_attempted {
             let page = episode.saturating_sub(1) / 20 + 1;
-            let fallback_items = match self.fetch_resource_page(id, season, episode, 0, page).await {
+            let fallback_items = match self.fetch_resource_page(id, season, episode, 0, page).await
+            {
                 Ok((fallback_items, _)) => fallback_items,
                 Err(error) => {
                     log::warn!("moviebox legacy episode resource fallback failed: {error}");
@@ -180,7 +181,6 @@ impl crate::providers::ReleaseProvider for client::MovieBoxClient {
 
 use client::{MovieBoxClient, ScraperError};
 use serde_json::{Value, json};
-
 
 async fn resolve_resource_item(
     client: &MovieBoxClient,
