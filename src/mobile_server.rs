@@ -403,7 +403,13 @@ fn error_response(
     message: impl Into<String>,
     origin: Option<&str>,
 ) -> Response<Full<Bytes>> {
-    json_response(status, &ErrorResponse { error: message.into() }, origin)
+    json_response(
+        status,
+        &ErrorResponse {
+            error: message.into(),
+        },
+        origin,
+    )
 }
 
 fn empty_response(status: StatusCode, origin: Option<&str>) -> Response<Full<Bytes>> {
