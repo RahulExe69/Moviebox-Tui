@@ -88,21 +88,31 @@ impl crate::providers::ReleaseProvider for client::MovieBoxClient {
             }
         }
 
-        let items = match resources_res {
+        let mut items = match resources_res {
             Ok(payload) => payload
                 .get("list")
                 .and_then(Value::as_array)
                 .cloned()
                 .unwrap_or_default(),
-            Err(_) if releases.is_empty() => {
-                let page = episode.saturating_sub(1) / 20 + 1;
-                self.fetch_resource_page(id, season, episode, 0, page)
-                    .await
-                    .map_err(ProviderError::from)?
-                    .0
+            Err(error) => {
+                log::warn!("moviebox episode resource endpoint failed: {error}");
+                Vec::new()
             }
-            Err(_) => Vec::new(),
         };
+
+        // The newer /resource/v2 endpoint can return a successful response with
+        // an empty or differently shaped list for some series. In that case the
+        // legacy paged endpoint is still worth trying, even though the HTTP
+        // request itself did not fail.
+        if items.is_empty() && releases.is_empty() {
+            let page = episode.saturating_sub(1) / 20 + 1;
+            match self.fetch_resource_page(id, season, episode, 0, page).await {
+                Ok((fallback_items, _)) => items = fallback_items,
+                Err(error) => {
+                    log::warn!("moviebox legacy episode resource fallback failed: {error}");
+                }
+            }
+        }
         for item in items {
             let mut rel = adapt::moviebox_resource_item_to_release(&item);
             if (season != 0 || episode != 0)
