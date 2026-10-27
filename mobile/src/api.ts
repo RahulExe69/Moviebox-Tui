@@ -10,6 +10,33 @@ export interface CatalogItem {
   poster_url?: string | null;
   season_count?: number | null;
 }
+export interface PlaybackMirror {
+  label: string;
+  resolver_url: string;
+  headers: Array<[string, string]>;
+  direct_file: boolean;
+}
+export interface PlaybackRelease {
+  provider: string;
+  filename: string;
+  quality?: string | null;
+  codec?: string | null;
+  language?: string | null;
+  size_bytes?: number | null;
+  season?: number | null;
+  episode?: number | null;
+  mirrors: PlaybackMirror[];
+  resource_id?: string | null;
+}
+export interface SubtitleOption { name: string; url: string; }
+export interface MobilePlaybackResponse {
+  provider: string;
+  media_id: string;
+  season: number;
+  episode: number;
+  releases: PlaybackRelease[];
+  subtitles: SubtitleOption[];
+}
 export interface MediaDetails {
   id: { provider: string; value: string };
   title: string;
