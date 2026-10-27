@@ -71,20 +71,25 @@ impl crate::providers::ReleaseProvider for client::MovieBoxClient {
         let mut releases = Vec::new();
         let mut seen_urls = std::collections::HashSet::new();
 
-        if let Ok(json) = play_info_res {
-            for rel in adapt::moviebox_play_info_json_to_releases(
-                &json,
-                season,
-                episode,
-                self.user_agent(),
-            ) {
-                if let Some(url) = rel.direct_url() {
-                    let base = url.split('?').next().unwrap_or(url).to_string();
-                    if !base.is_empty() {
-                        seen_urls.insert(base);
+        match play_info_res {
+            Ok(json) => {
+                for rel in adapt::moviebox_play_info_json_to_releases(
+                    &json,
+                    season,
+                    episode,
+                    self.user_agent(),
+                ) {
+                    if let Some(url) = rel.direct_url() {
+                        let base = url.split('?').next().unwrap_or(url).to_string();
+                        if !base.is_empty() {
+                            seen_urls.insert(base);
+                        }
                     }
+                    releases.push(rel);
                 }
-                releases.push(rel);
+            }
+            Err(error) => {
+                log::warn!("moviebox play-info endpoint failed: {error}");
             }
         }
 
@@ -110,6 +115,7 @@ impl crate::providers::ReleaseProvider for client::MovieBoxClient {
                 Ok((fallback_items, _)) => items = fallback_items,
                 Err(error) => {
                     log::warn!("moviebox legacy episode resource fallback failed: {error}");
+                    return Err(ProviderError::from(error));
                 }
             }
         }
