@@ -155,6 +155,19 @@ struct PlaybackRequest {
     episode: Option<usize>,
 }
 
+#[derive(Debug, Deserialize)]
+struct ResolvePlaybackRequest {
+    provider: String,
+    media_id: String,
+    #[serde(default)]
+    season: Option<usize>,
+    #[serde(default)]
+    episode: Option<usize>,
+    release_index: usize,
+    #[serde(default)]
+    subtitle_index: Option<usize>,
+}
+
 #[derive(Debug, Serialize)]
 struct HealthResponse {
     ok: bool,
@@ -287,6 +300,32 @@ async fn handle_request(
                 Err(error) => api_error_response(error, origin.as_deref()),
             }
         }
+        (Method::POST, "/api/v1/playback/resolve") => {
+            let payload = match read_json::<ResolvePlaybackRequest>(request.into_body()).await {
+                Ok(payload) => payload,
+                Err(()) => {
+                    return error_response(
+                        StatusCode::BAD_REQUEST,
+                        "Invalid JSON request",
+                        origin.as_deref(),
+                    );
+                }
+            };
+            match api
+                .resolve_playback(
+                    &payload.provider,
+                    &payload.media_id,
+                    payload.season.unwrap_or(0),
+                    payload.episode.unwrap_or(0),
+                    payload.release_index,
+                    payload.subtitle_index,
+                )
+                .await
+            {
+                Ok(source) => json_response(StatusCode::OK, &source, origin.as_deref()),
+                Err(error) => api_error_response(error, origin.as_deref()),
+            }
+        }
         _ => error_response(StatusCode::NOT_FOUND, "Route not found", origin.as_deref()),
     }
 }
@@ -311,6 +350,12 @@ fn api_error_response(error: MobileApiError, origin: Option<&str>) -> Response<F
             StatusCode::BAD_REQUEST,
             "Choose either a movie or a specific season and episode",
         ),
+        MobileApiError::InvalidReleaseIndex => {
+            (StatusCode::BAD_REQUEST, "Playback release index is out of range")
+        }
+        MobileApiError::InvalidSubtitleIndex => {
+            (StatusCode::BAD_REQUEST, "Subtitle index is out of range")
+        }
         MobileApiError::Provider(ProviderError::NotFound) => {
             (StatusCode::NOT_FOUND, "No results found")
         }
