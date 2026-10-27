@@ -372,7 +372,18 @@ fn api_error_response(error: MobileApiError, origin: Option<&str>) -> Response<F
             StatusCode::TOO_MANY_REQUESTS,
             "Provider rate limited the request",
         ),
-        MobileApiError::Provider(_) => (StatusCode::BAD_GATEWAY, "Provider request failed"),
+        MobileApiError::Provider(ProviderError::Network(_)) => (
+            StatusCode::BAD_GATEWAY,
+            "Provider network request failed. Check your connection and retry.",
+        ),
+        MobileApiError::Provider(ProviderError::Parsing(_)) => (
+            StatusCode::BAD_GATEWAY,
+            "Provider returned an unexpected response. The source integration may need updating.",
+        ),
+        MobileApiError::Provider(ProviderError::Unavailable(_)) => (
+            StatusCode::BAD_GATEWAY,
+            "Provider could not supply playback data for this title or episode.",
+        ),
         MobileApiError::Service(_) => (StatusCode::BAD_GATEWAY, "Homepage request failed"),
     };
     error_response(status, message, origin)
