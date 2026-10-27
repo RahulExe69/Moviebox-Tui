@@ -279,7 +279,7 @@ fn api_error_response(error: MobileApiError, origin: Option<&str>) -> Response<F
         MobileApiError::Provider(ProviderError::RateLimited(_)) => (
             StatusCode::TOO_MANY_REQUESTS,
             "Provider rate limited the request",
-        )
+        ),
         MobileApiError::Provider(_) => (StatusCode::BAD_GATEWAY, "Provider request failed"),
         MobileApiError::Service(_) => (StatusCode::BAD_GATEWAY, "Homepage request failed"),
     };
