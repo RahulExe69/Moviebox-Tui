@@ -77,7 +77,9 @@ fn start_backend_payload() -> Result<String, &'static str> {
 }
 
 fn stop_backend() {
-    let mut state = backend_state().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    let mut state = backend_state()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     if let Some(running) = state.take() {
         running.server.stop();
         drop(running);
