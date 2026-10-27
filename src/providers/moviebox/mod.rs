@@ -217,13 +217,11 @@ async fn resolve_resource_item(
                 return None;
             }
         };
-        let Some(recovered) = adapt::moviebox_resource_position_json_to_release(
+        let recovered = adapt::moviebox_resource_position_json_to_release(
             &payload,
             &release,
             client.user_agent(),
-        ) else {
-            return None;
-        };
+        )?;
         release = recovered;
     }
 
