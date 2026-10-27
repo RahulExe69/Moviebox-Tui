@@ -4,6 +4,7 @@ pub mod download;
 pub mod favorites;
 pub mod history;
 pub mod logging;
+pub mod mobile_api;
 pub mod models;
 pub mod net;
 pub mod player;
