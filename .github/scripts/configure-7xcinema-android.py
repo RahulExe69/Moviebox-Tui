@@ -22,7 +22,7 @@ if not LIBRARY.is_file():
     fail("Rust ARM64 shared library is missing: " + str(LIBRARY))
 
 JAVA_DEST.mkdir(parents=True, exist_ok=True)
-for filename in ("MobileBackendPlugin.java", "MainActivity.java"):
+for filename in ("MobileBackendPlugin.java", "MainActivity.java", "PlayerActivity.java"):
     source = JAVA_SOURCE / filename
     if not source.is_file():
         fail("Required native Java source is missing: " + str(source))
@@ -44,6 +44,14 @@ if "android.permission.INTERNET" not in manifest:
     )
 if not re.search(r'android:usesCleartextTraffic\s*=', manifest):
     manifest = manifest.replace("<application", '<application android:usesCleartextTraffic="true"', 1)
+if 'android:name=".PlayerActivity"' not in manifest:
+    manifest = manifest.replace(
+        "</application>",
+        '        <activity android:name=".PlayerActivity" '
+        'android:exported="false" android:screenOrientation="sensorLandscape" '
+        'android:configChanges="orientation|screenSize|keyboardHidden" />\n    </application>',
+        1,
+    )
 manifest_path.write_text(manifest, encoding="utf-8")
 
 gradle_path = ANDROID / "app" / "build.gradle"
@@ -59,6 +67,22 @@ if "abiFilters" not in gradle:
     )
     if count != 1:
         fail("Could not configure the ARM64 ABI filter in app/build.gradle.")
+
+media3_dependencies = """    implementation "androidx.media3:media3-exoplayer:1.11.1"
+    implementation "androidx.media3:media3-exoplayer-hls:1.11.1"
+    implementation "androidx.media3:media3-exoplayer-dash:1.11.1"
+    implementation "androidx.media3:media3-ui:1.11.1"
+"""
+if "androidx.media3:media3-exoplayer:" not in gradle:
+    gradle, count = re.subn(
+        r"(?m)^\s*dependencies\s*\{",
+        lambda match: match.group(0) + "\n" + media3_dependencies,
+        gradle,
+        count=1,
+    )
+    if count != 1:
+        fail("Could not add AndroidX Media3 dependencies to app/build.gradle.")
+
 gradle_path.write_text(gradle, encoding="utf-8")
 
 print("Configured 7xCinema native bridge and packaged libmoviebox_tui.so for arm64-v8a.")
