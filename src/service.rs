@@ -2,12 +2,12 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use crate::models::BrowseMetrics;
-use crate::providers::{Provider, ReleaseProvider};
 use crate::providers::bdix::circleftp::CircleFtpClient;
 use crate::providers::bdix::dhakaflix::client::DhakaFlixClient;
 use crate::providers::fourkhdhub::FourKHdHubClient;
 use crate::providers::models::{CatalogItem, MediaDetails, ProviderError, ProviderKind, Release};
 use crate::providers::moviebox::client::MovieBoxClient;
+use crate::providers::{Provider, ReleaseProvider};
 
 #[derive(Clone)]
 pub struct MovieBoxService {
@@ -161,7 +161,6 @@ impl MovieBoxService {
         }
     }
 
-
     /// Load playable releases using the same provider paths as the terminal UI.
     /// This returns candidate releases and their mirror metadata; resolving a
     /// provider-specific embed is a separate, on-demand operation.
@@ -183,19 +182,35 @@ impl MovieBoxService {
                 ReleaseProvider::episode_streams(client, subject_id, season, episode).await?
             }
             ProviderKind::BdixCircleFtp => {
-                ReleaseProvider::episode_streams(&self.circleftp_client, subject_id, season, episode).await?
+                ReleaseProvider::episode_streams(
+                    &self.circleftp_client,
+                    subject_id,
+                    season,
+                    episode,
+                )
+                .await?
             }
             ProviderKind::BdixDhakaFlix => {
-                ReleaseProvider::episode_streams(&self.dhakaflix_client, subject_id, season, episode).await?
+                ReleaseProvider::episode_streams(
+                    &self.dhakaflix_client,
+                    subject_id,
+                    season,
+                    episode,
+                )
+                .await?
             }
             ProviderKind::Dramachi => {
-                ReleaseProvider::episode_streams(&self.dramachi_client, subject_id, season, episode).await?
+                ReleaseProvider::episode_streams(&self.dramachi_client, subject_id, season, episode)
+                    .await?
             }
             ProviderKind::Addons => {
                 let addons = tokio::task::spawn_blocking(crate::config::load_addons)
                     .await
                     .unwrap_or_default();
-                if !addons.iter().any(|addon| addon.enabled && addon.provides_stream) {
+                if !addons
+                    .iter()
+                    .any(|addon| addon.enabled && addon.provides_stream)
+                {
                     return Err(ProviderError::Unavailable(
                         "No stream addons enabled. Configure a stream addon first.".to_string(),
                     ));
@@ -209,16 +224,15 @@ impl MovieBoxService {
                             || season > 0
                             || episode > 0
                     });
-                let (releases, _blocked_addons) =
-                    crate::providers::addons::aggregate_streams(
-                        &self.addon_client,
-                        &addons,
-                        subject_id,
-                        season,
-                        episode,
-                        is_series,
-                    )
-                    .await;
+                let (releases, _blocked_addons) = crate::providers::addons::aggregate_streams(
+                    &self.addon_client,
+                    &addons,
+                    subject_id,
+                    season,
+                    episode,
+                    is_series,
+                )
+                .await;
                 releases
             }
         };
