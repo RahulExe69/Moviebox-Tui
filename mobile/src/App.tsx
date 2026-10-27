@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState, type FormEvent } from "react";
-import { apiRequest, connectBackend, resetConnection, type CatalogItem, type MediaDetails, type ProviderOption } from "./api";
+import { apiRequest, connectBackend, resetConnection, type CatalogItem, type MediaDetails, type MobilePlaybackResponse, type ProviderOption } from "./api";
 
 type Phase = "connecting" | "ready" | "error";
 type ResultFilter = "all" | "movie" | "series";
@@ -13,6 +13,9 @@ export default function App() {
   const [filter, setFilter] = useState<ResultFilter>("all");
   const [searching, setSearching] = useState(false);
   const [details, setDetails] = useState<MediaDetails | null>(null);
+  const [playback, setPlayback] = useState<MobilePlaybackResponse | null>(null);
+  const [loadingPlayback, setLoadingPlayback] = useState(false);
+  const [playbackError, setPlaybackError] = useState("");
   const [statusText, setStatusText] = useState("Starting on-device engine");
   const [error, setError] = useState("");
   const [bootAttempt, setBootAttempt] = useState(0);
@@ -57,6 +60,8 @@ export default function App() {
     setSearching(true);
     setError("");
     setDetails(null);
+    setPlayback(null);
+    setPlaybackError("");
     setFilter("all");
     try {
       const results = await apiRequest<CatalogItem[]>("/api/v1/search", {
@@ -75,6 +80,8 @@ export default function App() {
 
   async function openDetails(item: CatalogItem) {
     setError("");
+    setPlayback(null);
+    setPlaybackError("");
     try {
       const result = await apiRequest<MediaDetails>("/api/v1/details", {
         method: "POST",
@@ -83,6 +90,36 @@ export default function App() {
       setDetails(result);
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "Could not load title details.");
+    }
+  }
+
+  async function findPlaybackSources() {
+    if (!details || loadingPlayback) return;
+    setLoadingPlayback(true);
+    setPlaybackError("");
+    setPlayback(null);
+    const firstEpisode = details.seasons.flatMap((season) => season.episodes)[0];
+    const season = details.media_type === "series"
+      ? Math.max(1, firstEpisode?.season ?? details.seasons[0]?.number ?? 1)
+      : 0;
+    const episode = details.media_type === "series"
+      ? Math.max(1, firstEpisode?.number ?? 1)
+      : 0;
+    try {
+      const result = await apiRequest<MobilePlaybackResponse>("/api/v1/playback/sources", {
+        method: "POST",
+        body: JSON.stringify({
+          provider: details.id.provider,
+          media_id: details.id.value,
+          season,
+          episode
+        })
+      });
+      setPlayback(result);
+    } catch (reason) {
+      setPlaybackError(reason instanceof Error ? reason.message : "Could not find playback sources.");
+    } finally {
+      setLoadingPlayback(false);
     }
   }
 
@@ -137,7 +174,19 @@ export default function App() {
           {details.genres.length > 0 && <div className="genre-list">{details.genres.map((genre) => <span key={genre}>{genre}</span>)}</div>}
           {details.director && <p className="credit"><b>Director</b> {details.director}</p>}{details.stars && <p className="credit"><b>Cast</b> {details.stars}</p>}
           {details.seasons.length > 0 && <p className="credit"><b>Seasons</b> {details.seasons.length} available</p>}{details.dubs.length > 0 && <p className="credit"><b>Audio options</b> {details.dubs.map((dub) => dub.label).join(", ")}</p>}
-          <p className="provider-note">Details from {details.id.provider}. In-app playback is a later milestone.</p>
+          <div className="playback-actions"><button className="playback-button" type="button" onClick={() => void findPlaybackSources()} disabled={loadingPlayback || phase !== "ready"}>{loadingPlayback ? <><span className="spinner" /> Finding sources…</> : playback ? "Refresh playback sources" : "Find playback sources"}</button></div>
+          {playbackError && <p className="playback-error" role="alert">{playbackError}</p>}
+          {playback && <section className="playback-results" aria-label="Playback sources">
+            <div className="playback-results-heading"><strong>STREAM SOURCES</strong><span>{playback.releases.length} found</span></div>
+            {playback.releases.map((release, index) => <article className="playback-release" key={release.provider + ":" + release.filename + ":" + index}>
+              <div className="release-main"><strong>{release.filename || "Stream source"}</strong><span>{release.quality || "Quality not listed"}{release.language ? " · " + release.language : ""}{release.size_bytes ? " · " + (release.size_bytes / 1073741824).toFixed(2) + " GB" : ""}</span></div>
+              <div className="release-mirrors">{release.mirrors.length} mirror{release.mirrors.length === 1 ? "" : "s"}{release.mirrors[0] ? " · " + release.mirrors.map((mirror) => mirror.label).filter(Boolean).join(" / ") : ""}</div>
+              {release.mirrors.some((mirror) => mirror.headers.length > 0) && <span className="release-header-note">Request headers included</span>}
+            </article>)}
+            {playback.subtitles.length > 0 && <div className="subtitle-options"><b>Subtitle options</b><span>{playback.subtitles.map((subtitle) => subtitle.name).join(" · ")}</span></div>}
+            <p className="playback-next-step">Source discovery is working. Native in-app playback is the next milestone.</p>
+          </section>}
+          <p className="provider-note">Details from {details.id.provider}. Sources are requested from the selected provider.</p>
         </div>
       </section></div>}
     </div>
