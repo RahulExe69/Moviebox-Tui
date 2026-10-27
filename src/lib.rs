@@ -1,3 +1,5 @@
+#[cfg(target_os = "android")]
+pub mod android_jni;
 pub mod cache;
 pub mod config;
 pub mod download;
@@ -6,8 +8,6 @@ pub mod history;
 pub mod logging;
 pub mod mobile_api;
 pub mod mobile_server;
-#[cfg(target_os = "android")]
-pub mod android_jni;
 pub mod models;
 pub mod net;
 pub mod player;

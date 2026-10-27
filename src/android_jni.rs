@@ -1,14 +1,14 @@
 //! JNI entry points used by the Android Capacitor plugin.
 //! A fresh token is read from the device CSPRNG; neither the token nor request contents are logged.
 
-use std::ffi::{c_char, c_void, CString};
+use crate::mobile_api::MobileApi;
+use crate::mobile_server::{MobileServerHandle, start_loopback};
+use std::ffi::{CString, c_char, c_void};
 use std::fs::File;
 use std::io::Read;
 use std::net::SocketAddr;
 use std::sync::{Mutex, OnceLock};
 use tokio::runtime::{Builder, Runtime};
-use crate::mobile_api::MobileApi;
-use crate::mobile_server::{MobileServerHandle, start_loopback};
 
 type RawJniEnv = *mut *const c_void;
 type JClass = *mut c_void;
@@ -22,7 +22,10 @@ struct RunningBackend {
 }
 impl RunningBackend {
     fn payload(&self) -> String {
-        format!(r#"{{"baseUrl":"http://127.0.0.1:{}","token":"{}"}}"#, self.port, self.token)
+        format!(
+            r#"{{"baseUrl":"http://127.0.0.1:{}","token":"{}"}}"#,
+            self.port, self.token
+        )
     }
 }
 
@@ -45,7 +48,9 @@ fn fresh_token() -> Result<String, &'static str> {
 }
 
 fn start_backend_payload() -> Result<String, &'static str> {
-    let mut state = backend_state().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    let mut state = backend_state()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     if let Some(running) = state.as_ref() {
         return Ok(running.payload());
     }
@@ -60,7 +65,12 @@ fn start_backend_payload() -> Result<String, &'static str> {
         .block_on(start_loopback(address, MobileApi::new(), token.clone()))
         .map_err(|_| "Could not bind the local API")?;
     let port = server.local_addr().port();
-    let running = RunningBackend { server, _runtime: runtime, token, port };
+    let running = RunningBackend {
+        server,
+        _runtime: runtime,
+        token,
+        port,
+    };
     let payload = running.payload();
     *state = Some(running);
     Ok(payload)
@@ -76,16 +86,22 @@ fn stop_backend() {
 
 /// NewStringUTF is entry 167 in the standard JNI native interface table.
 unsafe fn java_string(env: RawJniEnv, value: &str) -> JString {
-    if env.is_null() { return std::ptr::null_mut(); }
+    if env.is_null() {
+        return std::ptr::null_mut();
+    }
     let clean = value.replace('\0', " ");
     let c_value = match CString::new(clean) {
         Ok(value) => value,
         Err(_) => CString::new("Local backend error").expect("static text has no NUL"),
     };
     let functions = unsafe { *env as *const *const c_void };
-    if functions.is_null() { return std::ptr::null_mut(); }
+    if functions.is_null() {
+        return std::ptr::null_mut();
+    }
     let function_pointer = unsafe { *functions.add(167) };
-    if function_pointer.is_null() { return std::ptr::null_mut(); }
+    if function_pointer.is_null() {
+        return std::ptr::null_mut();
+    }
     let new_string_utf: unsafe extern "system" fn(RawJniEnv, *const c_char) -> JString =
         unsafe { std::mem::transmute(function_pointer) };
     unsafe { new_string_utf(env, c_value.as_ptr()) }
@@ -94,7 +110,8 @@ unsafe fn java_string(env: RawJniEnv, value: &str) -> JString {
 #[allow(non_snake_case)]
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_com_sevenx_cinema_MobileBackendPlugin_nativeStartServer(
-    env: RawJniEnv, _class: JClass,
+    env: RawJniEnv,
+    _class: JClass,
 ) -> JString {
     let payload = match start_backend_payload() {
         Ok(payload) => payload,
@@ -106,7 +123,8 @@ pub unsafe extern "system" fn Java_com_sevenx_cinema_MobileBackendPlugin_nativeS
 #[allow(non_snake_case)]
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_com_sevenx_cinema_MobileBackendPlugin_nativeStopServer(
-    _env: RawJniEnv, _class: JClass,
+    _env: RawJniEnv,
+    _class: JClass,
 ) {
     stop_backend();
 }
