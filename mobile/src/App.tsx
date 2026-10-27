@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState, type FormEvent } from "react";
-import { apiRequest, connectBackend, resetConnection, type CatalogItem, type MediaDetails, type MobilePlaybackResponse, type ProviderOption } from "./api";
+import { apiRequest, connectBackend, playInNativePlayer, resetConnection, type CatalogItem, type MediaDetails, type MobilePlaybackResponse, type ProviderOption, type ResolvedPlaybackSource } from "./api";
 
 type Phase = "connecting" | "ready" | "error";
 type ResultFilter = "all" | "movie" | "series";
@@ -15,6 +15,8 @@ export default function App() {
   const [details, setDetails] = useState<MediaDetails | null>(null);
   const [playback, setPlayback] = useState<MobilePlaybackResponse | null>(null);
   const [loadingPlayback, setLoadingPlayback] = useState(false);
+  const [playingReleaseIndex, setPlayingReleaseIndex] = useState<number | null>(null);
+  const [selectedSubtitleIndex, setSelectedSubtitleIndex] = useState("");
   const [playbackError, setPlaybackError] = useState("");
   const [statusText, setStatusText] = useState("Starting on-device engine");
   const [error, setError] = useState("");
@@ -116,10 +118,42 @@ export default function App() {
         })
       });
       setPlayback(result);
+      setSelectedSubtitleIndex(result.subtitles.length > 0 ? "0" : "");
     } catch (reason) {
       setPlaybackError(reason instanceof Error ? reason.message : "Could not find playback sources.");
     } finally {
       setLoadingPlayback(false);
+    }
+  }
+
+  async function playRelease(releaseIndex: number) {
+    if (!details || !playback || playingReleaseIndex !== null) return;
+    setPlayingReleaseIndex(releaseIndex);
+    setPlaybackError("");
+    const subtitleIndex = selectedSubtitleIndex === "" ? undefined : Number(selectedSubtitleIndex);
+    try {
+      const source = await apiRequest<ResolvedPlaybackSource>("/api/v1/playback/resolve", {
+        method: "POST",
+        body: JSON.stringify({
+          provider: playback.provider,
+          media_id: playback.media_id,
+          season: playback.season,
+          episode: playback.episode,
+          release_index: releaseIndex,
+          ...(subtitleIndex === undefined ? {} : { subtitle_index: subtitleIndex })
+        })
+      });
+      const headers = Object.fromEntries(source.headers);
+      await playInNativePlayer({
+        url: source.url,
+        title: details.title,
+        headers,
+        ...(source.subtitle ? { subtitleUrl: source.subtitle } : {})
+      });
+    } catch (reason) {
+      setPlaybackError(reason instanceof Error ? reason.message : "Could not open this playback source.");
+    } finally {
+      setPlayingReleaseIndex(null);
     }
   }
 
@@ -178,13 +212,14 @@ export default function App() {
           {playbackError && <p className="playback-error" role="alert">{playbackError}</p>}
           {playback && <section className="playback-results" aria-label="Playback sources">
             <div className="playback-results-heading"><strong>STREAM SOURCES</strong><span>{playback.releases.length} found</span></div>
+            {playback.subtitles.length > 0 && <label className="subtitle-picker"><span>SUBTITLES</span><select value={selectedSubtitleIndex} onChange={(event) => setSelectedSubtitleIndex(event.target.value)}><option value="">Off</option>{playback.subtitles.map((subtitle, index) => <option key={subtitle.url + index} value={String(index)}>{subtitle.name}</option>)}</select></label>}
             {playback.releases.map((release, index) => <article className="playback-release" key={release.provider + ":" + release.filename + ":" + index}>
               <div className="release-main"><strong>{release.filename || "Stream source"}</strong><span>{release.quality || "Quality not listed"}{release.language ? " · " + release.language : ""}{release.size_bytes ? " · " + (release.size_bytes / 1073741824).toFixed(2) + " GB" : ""}</span></div>
               <div className="release-mirrors">{release.mirrors.length} mirror{release.mirrors.length === 1 ? "" : "s"}{release.mirrors[0] ? " · " + release.mirrors.map((mirror) => mirror.label).filter(Boolean).join(" / ") : ""}</div>
               {release.mirrors.some((mirror) => mirror.headers.length > 0) && <span className="release-header-note">Request headers included</span>}
+              <button className="release-play-button" type="button" disabled={playingReleaseIndex !== null} onClick={() => void playRelease(index)}>{playingReleaseIndex === index ? <><span className="spinner" /> Opening player…</> : "▶ Play in app"}</button>
             </article>)}
-            {playback.subtitles.length > 0 && <div className="subtitle-options"><b>Subtitle options</b><span>{playback.subtitles.map((subtitle) => subtitle.name).join(" · ")}</span></div>}
-            <p className="playback-next-step">Source discovery is working. Native in-app playback is the next milestone.</p>
+            <p className="playback-next-step">Choose a source to open the native player. Some provider links may still fail due to upstream restrictions.</p>
           </section>}
           <p className="provider-note">Details from {details.id.provider}. Sources are requested from the selected provider.</p>
         </div>
