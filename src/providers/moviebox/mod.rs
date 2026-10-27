@@ -109,7 +109,9 @@ impl crate::providers::ReleaseProvider for client::MovieBoxClient {
         // an empty or differently shaped list for some series. In that case the
         // legacy paged endpoint is still worth trying, even though the HTTP
         // request itself did not fail.
+        let mut legacy_fallback_attempted = false;
         if items.is_empty() && releases.is_empty() {
+            legacy_fallback_attempted = true;
             let page = episode.saturating_sub(1) / 20 + 1;
             match self.fetch_resource_page(id, season, episode, 0, page).await {
                 Ok((fallback_items, _)) => items = fallback_items,
@@ -120,39 +122,9 @@ impl crate::providers::ReleaseProvider for client::MovieBoxClient {
             }
         }
         for item in items {
-            let mut rel = adapt::moviebox_resource_item_to_release(&item);
-            if (season != 0 || episode != 0)
-                && (rel.season != Some(season) || rel.episode != Some(episode))
-            {
+            let Some(rel) = resolve_resource_item(self, id, season, episode, item).await else {
                 continue;
-            }
-            if rel.mirrors.is_empty() {
-                // Both playback and resource APIs can return an upgrade clip.
-                // Ask the resource failover API for the original file instead.
-                let origin = item
-                    .get("resourceLink")
-                    .or_else(|| item.get("url"))
-                    .and_then(Value::as_str)
-                    .filter(|url| adapt::is_deprecation_notice_url(url));
-                let (Some(resource_id), Some(origin)) = (rel.resource_id.as_deref(), origin) else {
-                    continue;
-                };
-                let payload = match self.get_resource_position(id, resource_id, origin).await {
-                    Ok(payload) => payload,
-                    Err(error) => {
-                        log::warn!("moviebox direct file recovery failed: {error}");
-                        continue;
-                    }
-                };
-                let Some(recovered) = adapt::moviebox_resource_position_json_to_release(
-                    &payload,
-                    &rel,
-                    self.user_agent(),
-                ) else {
-                    continue;
-                };
-                rel = recovered;
-            }
+            };
             if let Some(url) = rel.direct_url() {
                 let base = url.split('?').next().unwrap_or(url).to_string();
                 if !base.is_empty() && !seen_urls.insert(base) {
@@ -160,6 +132,33 @@ impl crate::providers::ReleaseProvider for client::MovieBoxClient {
                 }
             }
             releases.push(rel);
+        }
+
+        // Some upstream versions return rows for a different episode even when
+        // the v2 request includes epFrom/epTo. If none survived exact-episode
+        // filtering, retry the legacy paged endpoint once before failing.
+        if releases.is_empty() && !legacy_fallback_attempted {
+            let page = episode.saturating_sub(1) / 20 + 1;
+            let fallback_items = match self.fetch_resource_page(id, season, episode, 0, page).await {
+                Ok((fallback_items, _)) => fallback_items,
+                Err(error) => {
+                    log::warn!("moviebox legacy episode resource fallback failed: {error}");
+                    return Err(ProviderError::from(error));
+                }
+            };
+
+            for item in fallback_items {
+                let Some(rel) = resolve_resource_item(self, id, season, episode, item).await else {
+                    continue;
+                };
+                if let Some(url) = rel.direct_url() {
+                    let base = url.split('?').next().unwrap_or(url).to_string();
+                    if !base.is_empty() && !seen_urls.insert(base) {
+                        continue;
+                    }
+                }
+                releases.push(rel);
+            }
         }
 
         if releases.is_empty() {
@@ -181,6 +180,55 @@ impl crate::providers::ReleaseProvider for client::MovieBoxClient {
 
 use client::{MovieBoxClient, ScraperError};
 use serde_json::{Value, json};
+
+
+async fn resolve_resource_item(
+    client: &MovieBoxClient,
+    subject_id: &str,
+    season: usize,
+    episode: usize,
+    item: Value,
+) -> Option<crate::providers::models::Release> {
+    let mut release = adapt::moviebox_resource_item_to_release(&item);
+    if (season != 0 || episode != 0)
+        && (release.season != Some(season) || release.episode != Some(episode))
+    {
+        return None;
+    }
+
+    if release.mirrors.is_empty() {
+        // Both playback and resource APIs can return an upgrade clip. Ask the
+        // resource failover API for the original file instead.
+        let origin = item
+            .get("resourceLink")
+            .or_else(|| item.get("url"))
+            .and_then(Value::as_str)
+            .filter(|url| adapt::is_deprecation_notice_url(url));
+        let (Some(resource_id), Some(origin)) = (release.resource_id.as_deref(), origin) else {
+            return None;
+        };
+        let payload = match client
+            .get_resource_position(subject_id, resource_id, origin)
+            .await
+        {
+            Ok(payload) => payload,
+            Err(error) => {
+                log::warn!("moviebox direct file recovery failed: {error}");
+                return None;
+            }
+        };
+        let Some(recovered) = adapt::moviebox_resource_position_json_to_release(
+            &payload,
+            &release,
+            client.user_agent(),
+        ) else {
+            return None;
+        };
+        release = recovered;
+    }
+
+    Some(release)
+}
 
 impl MovieBoxClient {
     pub async fn get_resource_position(
