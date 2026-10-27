@@ -5,7 +5,10 @@ use crate::models::BrowseMetrics;
 use crate::providers::bdix::circleftp::CircleFtpClient;
 use crate::providers::bdix::dhakaflix::client::DhakaFlixClient;
 use crate::providers::fourkhdhub::FourKHdHubClient;
-use crate::providers::models::{CatalogItem, MediaDetails, ProviderError, ProviderKind, Release};
+use crate::providers::models::{
+    CatalogItem, MediaDetails, PlaybackSource, ProviderError, ProviderKind, Release,
+    ResolutionIntent,
+};
 use crate::providers::moviebox::client::MovieBoxClient;
 use crate::providers::{Provider, ReleaseProvider};
 
@@ -243,6 +246,53 @@ impl MovieBoxService {
             ));
         }
         Ok(releases)
+    }
+
+    /// Resolve one provider-returned release into a stream URL with request metadata.
+    /// No caller-supplied URL is fetched: the release is selected from provider output.
+    pub async fn resolve_release_typed(
+        &self,
+        provider: ProviderKind,
+        release: &Release,
+    ) -> Result<PlaybackSource, ProviderError> {
+        if release.provider != provider {
+            return Err(ProviderError::Unavailable(
+                "Release provider does not match the selected source".to_string(),
+            ));
+        }
+
+        let source = if provider == ProviderKind::FourKHdHub {
+            let client = self.fourk_client.as_ref().ok_or_else(|| {
+                ProviderError::Unavailable("4KHDHub is unavailable".to_string())
+            })?;
+            client
+                .resolve_release(release, ResolutionIntent::Playback)
+                .await
+                .map_err(ProviderError::from)?
+        } else {
+            let mirror = release.mirrors.first().ok_or_else(|| {
+                ProviderError::Unavailable("No playable mirror was found".to_string())
+            })?;
+            PlaybackSource {
+                provider,
+                url: mirror.resolver_url.clone(),
+                headers: mirror.headers.clone(),
+                subtitle: None,
+                source_label: mirror.label.clone(),
+                max_height: Some(release.resolution_u64()).filter(|height| *height > 0),
+            }
+        };
+
+        let parsed = url::Url::parse(&source.url).map_err(|_| {
+            ProviderError::Unavailable("Provider returned an invalid playback URL".to_string())
+        })?;
+        if !matches!(parsed.scheme(), "http" | "https") || parsed.host_str().is_none() {
+            return Err(ProviderError::Unavailable(
+                "Only HTTP and HTTPS playback URLs are supported".to_string(),
+            ));
+        }
+
+        Ok(source)
     }
 
     pub async fn homepage(
