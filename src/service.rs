@@ -262,9 +262,10 @@ impl MovieBoxService {
         }
 
         let source = if provider == ProviderKind::FourKHdHub {
-            let client = self.fourk_client.as_ref().ok_or_else(|| {
-                ProviderError::Unavailable("4KHDHub is unavailable".to_string())
-            })?;
+            let client = self
+                .fourk_client
+                .as_ref()
+                .ok_or_else(|| ProviderError::Unavailable("4KHDHub is unavailable".to_string()))?;
             client
                 .resolve_release(release, ResolutionIntent::Playback)
                 .await
