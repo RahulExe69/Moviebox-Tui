@@ -145,6 +145,16 @@ struct DetailsRequest {
     media_id: String,
 }
 
+#[derive(Debug, Deserialize)]
+struct PlaybackRequest {
+    provider: String,
+    media_id: String,
+    #[serde(default)]
+    season: Option<usize>,
+    #[serde(default)]
+    episode: Option<usize>,
+}
+
 #[derive(Debug, Serialize)]
 struct HealthResponse {
     ok: bool,
@@ -253,6 +263,30 @@ async fn handle_request(
                 Err(error) => api_error_response(error, origin.as_deref()),
             }
         }
+        (Method::POST, "/api/v1/playback/sources") => {
+            let payload = match read_json::<PlaybackRequest>(request.into_body()).await {
+                Ok(payload) => payload,
+                Err(()) => {
+                    return error_response(
+                        StatusCode::BAD_REQUEST,
+                        "Invalid JSON request",
+                        origin.as_deref(),
+                    );
+                }
+            };
+            match api
+                .playback_sources(
+                    &payload.provider,
+                    &payload.media_id,
+                    payload.season.unwrap_or(0),
+                    payload.episode.unwrap_or(0),
+                )
+                .await
+            {
+                Ok(sources) => json_response(StatusCode::OK, &sources, origin.as_deref()),
+                Err(error) => api_error_response(error, origin.as_deref()),
+            }
+        }
         _ => error_response(StatusCode::NOT_FOUND, "Route not found", origin.as_deref()),
     }
 }
@@ -273,6 +307,10 @@ fn api_error_response(error: MobileApiError, origin: Option<&str>) -> Response<F
         MobileApiError::EmptyTabId => {
             (StatusCode::BAD_REQUEST, "Homepage tab ID must not be empty")
         }
+        MobileApiError::InvalidEpisodeSelection => (
+            StatusCode::BAD_REQUEST,
+            "Choose either a movie or a specific season and episode",
+        ),
         MobileApiError::Provider(ProviderError::NotFound) => {
             (StatusCode::NOT_FOUND, "No results found")
         }
