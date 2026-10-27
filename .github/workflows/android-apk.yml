@@ -66,6 +66,11 @@ jobs:
           echo "CC_aarch64_linux_android=$TOOLCHAIN/aarch64-linux-android21-clang" >> "$GITHUB_ENV"
           echo "AR_aarch64_linux_android=$TOOLCHAIN/llvm-ar" >> "$GITHUB_ENV"
 
+      - name: Cache Rust build outputs
+        uses: Swatinem/rust-cache@v2
+        with:
+          prefix-key: "android-apk-arm64"
+
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
@@ -81,6 +86,9 @@ jobs:
         uses: gradle/actions/setup-gradle@v4
 
       - name: Build Rust ARM64 shared library
+        env:
+          CARGO_PROFILE_RELEASE_LTO: "false"
+          CARGO_PROFILE_RELEASE_CODEGEN_UNITS: "8"
         run: cargo build --locked --release --target aarch64-linux-android --lib
 
       - name: Build the mobile frontend
