@@ -11,7 +11,9 @@ use thiserror::Error;
 
 use crate::models::BrowseMetrics;
 use crate::providers::ProviderCapabilities;
-use crate::providers::models::{CatalogItem, MediaDetails, ProviderError, ProviderKind, Release, SubtitleOption};
+use crate::providers::models::{
+    CatalogItem, MediaDetails, ProviderError, ProviderKind, Release, SubtitleOption,
+};
 use crate::service::MovieBoxService;
 
 /// Version of the mobile-facing contract. Bump only when the public contract changes.
@@ -32,7 +34,6 @@ pub struct MobileHomepage {
     pub items: Vec<CatalogItem>,
     pub metrics: HashMap<String, BrowseMetrics>,
 }
-
 
 /// Release metadata surfaced to the mobile client before a native player is launched.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -58,7 +59,9 @@ pub enum MobileApiError {
     EmptyMediaId,
     #[error("Homepage tab ID must not be empty")]
     EmptyTabId,
-    #[error("Choose either a movie (season and episode both zero) or a specific season and episode")]
+    #[error(
+        "Choose either a movie (season and episode both zero) or a specific season and episode"
+    )]
     InvalidEpisodeSelection,
     #[error(transparent)]
     Provider(#[from] ProviderError),
@@ -146,7 +149,6 @@ impl MobileApi {
             .map_err(MobileApiError::from)
     }
 
-
     /// Return candidate releases, transport headers, and available external subtitles.
     pub async fn playback_sources(
         &self,
@@ -173,7 +175,9 @@ impl MobileApi {
         // Caption lookup is best-effort: a subtitle service failure must not
         // prevent the user from seeing available video releases.
         let subtitles = if provider == ProviderKind::MovieBox {
-            let resource_id = releases.iter().find_map(|release| release.resource_id.as_deref());
+            let resource_id = releases
+                .iter()
+                .find_map(|release| release.resource_id.as_deref());
             if let Some(resource_id) = resource_id {
                 let sibling_ids = self
                     .details(provider.cache_key(), media_id)
