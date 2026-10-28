@@ -51,7 +51,6 @@ pub struct MobilePlaybackResponse {
     pub provider_sources: Vec<crate::providers::models::ProviderMediaId>,
 }
 
-
 /// Maps one merged playback row back to the provider-specific release index.
 /// Resolution can then query just that provider instead of repeating every search.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -110,7 +109,9 @@ pub enum MobileApiError {
 fn strip_trailing_title_tags(value: &str) -> String {
     let mut cleaned = value.trim().to_string();
     loop {
-        let Some(open) = cleaned.rfind('[') else { break };
+        let Some(open) = cleaned.rfind('[') else {
+            break;
+        };
         if cleaned.ends_with(']') && open > 0 {
             cleaned.truncate(open);
             cleaned = cleaned.trim().to_string();
@@ -141,12 +142,24 @@ fn years_compatible(left: Option<&str>, right: Option<&str>) -> bool {
 fn title_languages(value: &str) -> Vec<String> {
     let lower = value.to_ascii_lowercase();
     let known = [
-        ("english", "English"), ("hindi", "Hindi"), ("bengali", "Bengali"),
-        ("bangla", "Bengali"), ("tamil", "Tamil"), ("telugu", "Telugu"),
-        ("kannada", "Kannada"), ("malayalam", "Malayalam"), ("punjabi", "Punjabi"),
-        ("urdu", "Urdu"), ("japanese", "Japanese"), ("korean", "Korean"),
-        ("chinese", "Chinese"), ("spanish", "Spanish"), ("french", "French"),
-        ("arabic", "Arabic"), ("portuguese", "Portuguese"), ("thai", "Thai"),
+        ("english", "English"),
+        ("hindi", "Hindi"),
+        ("bengali", "Bengali"),
+        ("bangla", "Bengali"),
+        ("tamil", "Tamil"),
+        ("telugu", "Telugu"),
+        ("kannada", "Kannada"),
+        ("malayalam", "Malayalam"),
+        ("punjabi", "Punjabi"),
+        ("urdu", "Urdu"),
+        ("japanese", "Japanese"),
+        ("korean", "Korean"),
+        ("chinese", "Chinese"),
+        ("spanish", "Spanish"),
+        ("french", "French"),
+        ("arabic", "Arabic"),
+        ("portuguese", "Portuguese"),
+        ("thai", "Thai"),
     ];
     let mut languages = Vec::new();
     for (needle, label) in known {
@@ -174,7 +187,11 @@ fn mobile_catalog_item(item: CatalogItem) -> MobileCatalogItem {
     let display_title = strip_trailing_title_tags(&item.title);
     MobileCatalogItem {
         id: item.id.clone(),
-        title: if display_title.is_empty() { item.title.clone() } else { display_title },
+        title: if display_title.is_empty() {
+            item.title.clone()
+        } else {
+            display_title
+        },
         media_type: item.media_type,
         year: item.year,
         poster_url: item.poster_url,
@@ -191,7 +208,11 @@ fn playback_search_queries(title: &str) -> Vec<String> {
     if !cleaned.is_empty() {
         queries.push(cleaned);
     }
-    if !title.trim().is_empty() && !queries.iter().any(|query| query.eq_ignore_ascii_case(title.trim())) {
+    if !title.trim().is_empty()
+        && !queries
+            .iter()
+            .any(|query| query.eq_ignore_ascii_case(title.trim()))
+    {
         queries.push(title.trim().to_string());
     }
     queries
@@ -217,7 +238,12 @@ fn append_unique_releases(
             release.quality.as_deref().unwrap_or_default(),
             release.language.as_deref().unwrap_or_default(),
             release.resource_id.as_deref().unwrap_or_default(),
-            release.mirrors.iter().map(|mirror| mirror.resolver_url.as_str()).collect::<Vec<_>>().join(",")
+            release
+                .mirrors
+                .iter()
+                .map(|mirror| mirror.resolver_url.as_str())
+                .collect::<Vec<_>>()
+                .join(",")
         );
         if seen.insert(key) {
             output.push(release);
@@ -319,11 +345,16 @@ impl MobileApi {
         }
         let page = page.clamp(1, 1000);
         let (moviebox, fourk, dramachi, circleftp, dhakaflix) = tokio::join!(
-            self.service.search_typed(ProviderKind::MovieBox, query, page),
-            self.service.search_typed(ProviderKind::FourKHdHub, query, page),
-            self.service.search_typed(ProviderKind::Dramachi, query, page),
-            self.service.search_typed(ProviderKind::BdixCircleFtp, query, page),
-            self.service.search_typed(ProviderKind::BdixDhakaFlix, query, page),
+            self.service
+                .search_typed(ProviderKind::MovieBox, query, page),
+            self.service
+                .search_typed(ProviderKind::FourKHdHub, query, page),
+            self.service
+                .search_typed(ProviderKind::Dramachi, query, page),
+            self.service
+                .search_typed(ProviderKind::BdixCircleFtp, query, page),
+            self.service
+                .search_typed(ProviderKind::BdixDhakaFlix, query, page),
         );
 
         let provider_results = [
@@ -344,7 +375,10 @@ impl MobileApi {
                         let same_index = merged.iter().position(|existing| {
                             normalize_catalog_title(&existing.title) == normalized
                                 && existing.media_type == candidate.media_type
-                                && years_compatible(existing.year.as_deref(), candidate.year.as_deref())
+                                && years_compatible(
+                                    existing.year.as_deref(),
+                                    candidate.year.as_deref(),
+                                )
                         });
                         if let Some(index) = same_index {
                             let existing = &mut merged[index];
@@ -354,7 +388,11 @@ impl MobileApi {
                                 }
                             }
                             for language in candidate.languages {
-                                if !existing.languages.iter().any(|value| value.eq_ignore_ascii_case(&language)) {
+                                if !existing
+                                    .languages
+                                    .iter()
+                                    .any(|value| value.eq_ignore_ascii_case(&language))
+                                {
                                     existing.languages.push(language);
                                 }
                             }
@@ -425,16 +463,19 @@ impl MobileApi {
 
         let requested_provider = Self::parse_provider(provider)?;
         let mut title = media_title_from_id(media_id);
-        let mut source_ids: Vec<crate::providers::models::ProviderMediaId> = vec![
-            crate::providers::models::ProviderMediaId {
+        let mut source_ids: Vec<crate::providers::models::ProviderMediaId> =
+            vec![crate::providers::models::ProviderMediaId {
                 provider: requested_provider,
                 value: media_id.to_string(),
-            },
-        ];
+            }];
 
         // A title may have several MovieBox subject IDs (one per audio cut).
         // Start with the exact selected ID and append sibling cuts before other servers.
-        if let Ok(details) = self.service.details_typed(requested_provider, media_id).await {
+        if let Ok(details) = self
+            .service
+            .details_typed(requested_provider, media_id)
+            .await
+        {
             title = details.title.clone();
             if requested_provider == ProviderKind::MovieBox {
                 for dub in details.dubs {
@@ -587,11 +628,20 @@ impl MobileApi {
                 .unwrap_or_default();
             if let Ok(found) = self
                 .service
-                .get_ext_captions(&source_id.value, &resource_id, &sibling_ids, season, episode)
+                .get_ext_captions(
+                    &source_id.value,
+                    &resource_id,
+                    &sibling_ids,
+                    season,
+                    episode,
+                )
                 .await
             {
                 for subtitle in found {
-                    if !subtitles.iter().any(|existing| existing.url == subtitle.url) {
+                    if !subtitles
+                        .iter()
+                        .any(|existing| existing.url == subtitle.url)
+                    {
                         subtitles.push(subtitle);
                     }
                 }
