@@ -539,7 +539,7 @@ impl MobileApi {
                             value: item.id.value,
                         };
                         if !provider_sources.contains(&source_id) {
-                            provider_sources.push(source_id);
+                            provider_sources.push(source_id.clone());
                         }
                         append_unique_releases(
                             &mut releases,
