@@ -10,6 +10,10 @@ export interface CatalogItem {
   poster_url?: string | null;
   season_count?: number | null;
 }
+export interface MobileHomepage {
+  items: CatalogItem[];
+  metrics: Record<string, unknown>;
+}
 export interface PlaybackMirror {
   label: string;
   resolver_url: string;
