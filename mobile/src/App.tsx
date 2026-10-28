@@ -7,6 +7,7 @@ import {
   type CatalogItem,
   type MediaDetails,
   type MobilePlaybackResponse,
+  type NativeStreamSource,
   type ProviderOption,
   type ResolvedPlaybackSource,
 } from "./api";
