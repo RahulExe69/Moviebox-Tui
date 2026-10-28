@@ -217,57 +217,110 @@ impl MobileApi {
 
         if found.is_none() && requested_provider == ProviderKind::MovieBox {
             if let Some(title) = movie_title.as_deref() {
+                // MovieBox titles often include UI-only audio/quality tags such as
+                // "Hope [Hindi]" or "Clayface [Hindi][CAM]". Searching for that
+                // literal string elsewhere prevents the cross-provider fallback
+                // from finding the same movie under its canonical title.
+                let strip_trailing_tags = |value: &str| -> String {
+                    let mut cleaned = value.trim().to_string();
+                    loop {
+                        let Some(open) = cleaned.rfind('[') else { break };
+                        if cleaned.ends_with(']') && open > 0 {
+                            cleaned.truncate(open);
+                            cleaned = cleaned.trim().to_string();
+                        } else {
+                            break;
+                        }
+                    }
+                    cleaned
+                };
                 let normalize_title = |value: &str| -> String {
-                    value
+                    strip_trailing_tags(value)
                         .chars()
                         .filter(|ch| ch.is_alphanumeric())
                         .flat_map(char::to_lowercase)
                         .collect()
                 };
                 let wanted = normalize_title(title);
+                let mut queries = vec![strip_trailing_tags(title)];
+                if queries[0].is_empty() {
+                    queries[0] = title.trim().to_string();
+                }
+                // Also try the original provider title in case the tags are
+                // meaningful to a particular catalog's search implementation.
+                if !title.trim().is_empty() && !queries.iter().any(|q| q.eq_ignore_ascii_case(title.trim())) {
+                    queries.push(title.trim().to_string());
+                }
+
                 for alternate_provider in ProviderKind::ENABLED {
                     if alternate_provider == ProviderKind::MovieBox {
                         continue;
                     }
-                    let search_results = match self
-                        .service
-                        .search_typed(alternate_provider, title, 1)
-                        .await
-                    {
-                        Ok(results) => results,
-                        Err(error) => {
-                            log::debug!(
-                                "playback fallback search failed for {}: {}",
-                                alternate_provider,
-                                error
-                            );
-                            continue;
+                    let mut matched_item = None;
+                    for query in &queries {
+                        let search_results = match self
+                            .service
+                            .search_typed(alternate_provider, query, 1)
+                            .await
+                        {
+                            Ok(results) => results,
+                            Err(error) => {
+                                log::debug!(
+                                    "playback fallback search failed for {} with query {:?}: {}",
+                                    alternate_provider,
+                                    query,
+                                    error
+                                );
+                                continue;
+                            }
+                        };
+                        matched_item = search_results.into_iter().find(|item| {
+                            let candidate = normalize_title(&item.title);
+                            !wanted.is_empty()
+                                && (candidate == wanted
+                                    || (wanted.len() >= 5
+                                        && candidate.len() >= 5
+                                        && (candidate.starts_with(&wanted)
+                                            || wanted.starts_with(&candidate))))
+                        });
+                        if matched_item.is_some() {
+                            break;
                         }
-                    };
-                    for item in search_results {
-                        if normalize_title(&item.title) != wanted {
-                            continue;
-                        }
+                    }
+
+                    if let Some(item) = matched_item {
                         match self
                             .service
                             .releases_typed(alternate_provider, &item.id.value, season, episode)
                             .await
                         {
                             Ok(candidate_releases) if !candidate_releases.is_empty() => {
-                                found =
-                                    Some((alternate_provider, item.id.value, candidate_releases));
+                                log::info!(
+                                    "playback fallback found sources for {:?} using {}",
+                                    title,
+                                    alternate_provider
+                                );
+                                found = Some((
+                                    alternate_provider,
+                                    item.id.value,
+                                    candidate_releases,
+                                ));
                                 break;
                             }
                             Ok(_) => {
                                 last_error = ProviderError::Unavailable(
-                                    "No stream sources available".to_string(),
+                                    format!("{} returned no stream sources", alternate_provider),
                                 );
                             }
-                            Err(error) => last_error = error,
+                            Err(error) => {
+                                log::debug!(
+                                    "playback fallback releases failed for {}: {}",
+                                    alternate_provider,
+                                    error
+                                );
+                                last_error = error;
+                            }
                         }
-                    }
-                    if found.is_some() {
-                        break;
                     }
                 }
             }
