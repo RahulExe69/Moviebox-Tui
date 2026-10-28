@@ -212,6 +212,67 @@ export default function App() {
     }
   }
 
+  async function watchNow() {
+    if (!details || loadingPlayback || phase !== "ready") return;
+    setLoadingPlayback(true);
+    setPlaybackError("");
+    const firstEpisode = details.seasons.flatMap((season) => season.episodes)[0];
+    const season = details.media_type === "series"
+      ? Math.max(1, firstEpisode?.season ?? details.seasons[0]?.number ?? 1)
+      : 0;
+    const episode = details.media_type === "series"
+      ? Math.max(1, firstEpisode?.number ?? 1)
+      : 0;
+
+    try {
+      const candidates = playback ?? await apiRequest<MobilePlaybackResponse>("/api/v1/playback/sources", {
+        method: "POST",
+        body: JSON.stringify({
+          provider: details.id.provider,
+          media_id: details.id.value,
+          season,
+          episode
+        })
+      });
+      setPlayback(candidates);
+      if (!candidates.releases.length) {
+        throw new Error("This title has no playable sources right now.");
+      }
+
+      const subtitleIndex = selectedSubtitleIndex === "" ? undefined : Number(selectedSubtitleIndex);
+      const failures: string[] = [];
+      for (let index = 0; index < candidates.releases.length; index += 1) {
+        try {
+          const source = await apiRequest<ResolvedPlaybackSource>("/api/v1/playback/resolve", {
+            method: "POST",
+            body: JSON.stringify({
+              provider: candidates.provider,
+              media_id: candidates.media_id,
+              season: candidates.season,
+              episode: candidates.episode,
+              release_index: index,
+              ...(subtitleIndex === undefined ? {} : { subtitle_index: subtitleIndex })
+            })
+          });
+          await playInNativePlayer({
+            url: source.url,
+            title: details.title,
+            headers: Object.fromEntries(source.headers),
+            ...(source.subtitle ? { subtitleUrl: source.subtitle } : {})
+          });
+          return;
+        } catch (reason) {
+          failures.push(reason instanceof Error ? reason.message : "Source could not be opened");
+        }
+      }
+      throw new Error(failures[0] || "No source could be opened. Try another title or source.");
+    } catch (reason) {
+      setPlaybackError(reason instanceof Error ? reason.message : "Could not start playback.");
+    } finally {
+      setLoadingPlayback(false);
+    }
+  }
+
   async function playRelease(releaseIndex: number) {
     if (!details || !playback || playingReleaseIndex !== null) return;
     setPlayingReleaseIndex(releaseIndex);
@@ -460,7 +521,14 @@ export default function App() {
           {details.genres.length > 0 && <div className="genre-list">{details.genres.map((genre) => <span key={genre}>{genre}</span>)}</div>}
           {details.director && <p className="credit"><b>Director</b> {details.director}</p>}{details.stars && <p className="credit"><b>Cast</b> {details.stars}</p>}
           {details.seasons.length > 0 && <p className="credit"><b>Seasons</b> {details.seasons.length} available</p>}{details.dubs.length > 0 && <p className="credit"><b>Audio options</b> {details.dubs.map((dub) => dub.label).join(", ")}</p>}
-          <div className="playback-actions"><button className="playback-button" type="button" onClick={() => void findPlaybackSources()} disabled={loadingPlayback || phase !== "ready"}>{loadingPlayback ? <><span className="spinner" /> Finding sources…</> : playback ? "Refresh playback sources" : "Find playback sources"}</button></div>
+          <div className="playback-actions">
+            <button className="primary-button watch-now-button" type="button" onClick={() => void watchNow()} disabled={loadingPlayback || phase !== "ready"}>
+              {loadingPlayback ? <><span className="spinner" /> Finding a playable source…</> : <><span>▶</span> Watch now</>}
+            </button>
+            <button className="secondary-button source-options-button" type="button" onClick={() => void findPlaybackSources()} disabled={loadingPlayback || phase !== "ready"}>
+              {playback ? "Change source / subtitles" : "Other sources & subtitles"}
+            </button>
+          </div>
           {playbackError && <p className="playback-error" role="alert">{playbackError}</p>}
           {playback && <section className="playback-results" aria-label="Playback sources">
             <div className="playback-results-heading"><strong>STREAM SOURCES</strong><span>{playback.releases.length} found</span></div>
