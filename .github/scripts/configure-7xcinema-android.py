@@ -36,6 +36,39 @@ manifest_path = ANDROID / "app" / "src" / "main" / "AndroidManifest.xml"
 if not manifest_path.is_file():
     fail("Generated AndroidManifest.xml was not found.")
 manifest = manifest_path.read_text(encoding="utf-8")
+
+# Capacitor generates a generic launcher icon each time the Android project is
+# scaffolded. Replace it with the original 7xCinema cinema-gold/teal mark.
+manifest, icon_count = re.subn(
+    r'(android:(?:roundIcon|icon)\\s*=\\s*)"@mipmap/[^"]+"',
+    r'\\1"@drawable/ic_7xcinema_launcher"',
+    manifest,
+)
+if icon_count == 0 and 'android:icon="@drawable/ic_7xcinema_launcher"' not in manifest:
+    fail("Could not replace the generated Android launcher icon reference.")
+
+drawable_dir = ANDROID / "app" / "src" / "main" / "res" / "drawable"
+drawable_dir.mkdir(parents=True, exist_ok=True)
+launcher_icon = drawable_dir / "ic_7xcinema_launcher.xml"
+launcher_icon.write_text(
+    """<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="128"
+    android:viewportHeight="128">
+    <path android:fillColor="#080C15"
+        android:pathData="M24,5 H104 A19,19 0,0 1 123,24 V104 A19,19 0,0 1 104,123 H24 A19,19 0,0 1 5,104 V24 A19,19 0,0 1 24,5 Z" />
+    <path android:fillColor="#101A2B" android:strokeColor="#F6BF58" android:strokeWidth="3"
+        android:pathData="M28,25 H100 V91 H28 Z" />
+    <path android:fillColor="#55D9D1" android:pathData="M17,29 H23 V87 H17 Z M105,29 H111 V87 H105 Z" />
+    <path android:fillColor="#FFE1A6" android:pathData="M49,39 L84,58 L49,77 Z" />
+    <path android:fillColor="#F6BF58" android:pathData="M28,99 H100 V103 H28 Z" />
+    <path android:fillColor="#55D9D1" android:pathData="M35,108 H52 V112 H35 Z M57,108 H74 V112 H57 Z M79,108 H96 V112 H79 Z" />
+</vector>
+""",
+    encoding="utf-8",
+)
 if "android.permission.INTERNET" not in manifest:
     manifest = manifest.replace(
         "<application",
@@ -85,4 +118,4 @@ if "androidx.media3:media3-exoplayer:" not in gradle:
 
 gradle_path.write_text(gradle, encoding="utf-8")
 
-print("Configured 7xCinema native bridge and packaged libmoviebox_tui.so for arm64-v8a.")
+print("Configured 7xCinema native bridge, branded launcher icon, and libmoviebox_tui.so for arm64-v8a.")

@@ -240,13 +240,7 @@ impl MobileApi {
                     .map(|details| details.sibling_ids())
                     .unwrap_or_default();
                 self.service
-                    .get_ext_captions(
-                        &resolved_media_id,
-                        resource_id,
-                        &sibling_ids,
-                        season,
-                        episode,
-                    )
+                    .get_ext_captions(&resolved_media_id, resource_id, &sibling_ids, season, episode)
                     .await
                     .unwrap_or_default()
             } else {
