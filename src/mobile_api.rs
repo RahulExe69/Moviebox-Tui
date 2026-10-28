@@ -174,57 +174,118 @@ impl MobileApi {
             return Err(MobileApiError::InvalidEpisodeSelection);
         }
 
-        let provider = Self::parse_provider(provider)?;
-        // MovieBox often exposes each audio/language cut as a sibling subject ID.
-        // The selected listing can lack a direct file while another cut of the
-        // same title has one, so try the selected ID first, then its siblings.
-        let (resolved_media_id, releases) = if provider == ProviderKind::MovieBox {
-            let mut candidate_ids = vec![media_id.to_string()];
-            if let Ok(details) = self.service.details_typed(provider, media_id).await {
+        let requested_provider = Self::parse_provider(provider)?;
+        // Try MovieBox's selected audio cut and all sibling cuts first. If none
+        // has releases, search other configured providers for the same title.
+        let mut movie_title: Option<String> = None;
+        let mut candidate_ids = vec![media_id.to_string()];
+        if requested_provider == ProviderKind::MovieBox {
+            if let Ok(details) = self.service.details_typed(requested_provider, media_id).await {
+                movie_title = Some(details.title.clone());
                 for sibling_id in details.sibling_ids() {
                     if !sibling_id.trim().is_empty() && !candidate_ids.contains(&sibling_id) {
                         candidate_ids.push(sibling_id);
                     }
                 }
             }
+        }
 
-            let mut last_error =
-                ProviderError::Unavailable("No stream sources available".to_string());
-            let mut found = None;
-            for candidate_id in candidate_ids {
-                match self
-                    .service
-                    .releases_typed(provider, &candidate_id, season, episode)
-                    .await
-                {
-                    Ok(candidate_releases) if !candidate_releases.is_empty() => {
-                        found = Some((candidate_id, candidate_releases));
+        let mut last_error =
+            ProviderError::Unavailable("No stream sources available".to_string());
+        let mut found: Option<(ProviderKind, String, Vec<Release>)> = None;
+
+        for candidate_id in candidate_ids {
+            match self
+                .service
+                .releases_typed(requested_provider, &candidate_id, season, episode)
+                .await
+            {
+                Ok(candidate_releases) if !candidate_releases.is_empty() => {
+                    found = Some((requested_provider, candidate_id, candidate_releases));
+                    break;
+                }
+                Ok(_) => {
+                    last_error =
+                        ProviderError::Unavailable("No stream sources available".to_string());
+                }
+                Err(error) => last_error = error,
+            }
+        }
+
+        if found.is_none() && requested_provider == ProviderKind::MovieBox {
+            if let Some(title) = movie_title.as_deref() {
+                let normalize_title = |value: &str| -> String {
+                    value
+                        .chars()
+                        .filter(|ch| ch.is_alphanumeric())
+                        .flat_map(char::to_lowercase)
+                        .collect()
+                };
+                let wanted = normalize_title(title);
+                for alternate_provider in ProviderKind::ENABLED {
+                    if alternate_provider == ProviderKind::MovieBox {
+                        continue;
+                    }
+                    let search_results = match self
+                        .service
+                        .search_typed(alternate_provider, title, 1)
+                        .await
+                    {
+                        Ok(results) => results,
+                        Err(error) => {
+                            log::debug!(
+                                "playback fallback search failed for {}: {}",
+                                alternate_provider,
+                                error
+                            );
+                            continue;
+                        }
+                    };
+                    for item in search_results {
+                        if normalize_title(&item.title) != wanted {
+                            continue;
+                        }
+                        match self
+                            .service
+                            .releases_typed(
+                                alternate_provider,
+                                &item.id.value,
+                                season,
+                                episode,
+                            )
+                            .await
+                        {
+                            Ok(candidate_releases) if !candidate_releases.is_empty() => {
+                                found = Some((
+                                    alternate_provider,
+                                    item.id.value,
+                                    candidate_releases,
+                                ));
+                                break;
+                            }
+                            Ok(_) => {
+                                last_error = ProviderError::Unavailable(
+                                    "No stream sources available".to_string(),
+                                );
+                            }
+                            Err(error) => last_error = error,
+                        }
+                    }
+                    if found.is_some() {
                         break;
                     }
-                    Ok(_) => {
-                        last_error =
-                            ProviderError::Unavailable("No stream sources available".to_string());
-                    }
-                    Err(error) => last_error = error,
                 }
             }
+        }
 
-            match found {
-                Some(result) => result,
-                None => {
-                    return Err(MobileApiError::PlaybackProvider {
-                        provider,
-                        error: last_error,
-                    });
-                }
+        let (provider, resolved_media_id, releases) = match found {
+            Some(result) => result,
+            None => {
+                return Err(MobileApiError::PlaybackProvider {
+                    provider: requested_provider,
+                    error: last_error,
+                });
             }
-        } else {
-            let releases = self
-                .service
-                .releases_typed(provider, media_id, season, episode)
-                .await
-                .map_err(|error| MobileApiError::PlaybackProvider { provider, error })?;
-            (media_id.to_string(), releases)
         };
 
         // Caption lookup is best-effort: a subtitle service failure must not
@@ -240,7 +301,13 @@ impl MobileApi {
                     .map(|details| details.sibling_ids())
                     .unwrap_or_default();
                 self.service
-                    .get_ext_captions(&resolved_media_id, resource_id, &sibling_ids, season, episode)
+                    .get_ext_captions(
+                        &resolved_media_id,
+                        resource_id,
+                        &sibling_ids,
+                        season,
+                        episode,
+                    )
                     .await
                     .unwrap_or_default()
             } else {
