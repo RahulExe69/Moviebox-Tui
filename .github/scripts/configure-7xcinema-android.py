@@ -41,10 +41,10 @@ manifest = manifest_path.read_text(encoding="utf-8")
 # scaffolded. Replace it with the original 7xCinema cinema-gold/teal mark.
 manifest, icon_count = re.subn(
     r'(android:(?:roundIcon|icon)\s*=\s*)"@mipmap/[^"]+"',
-    r'\1"@drawable/7xcinema_icon"',
+    r'\1"@drawable/cinema_7xcinema_icon"',
     manifest,
 )
-if icon_count == 0 and 'android:icon="@drawable/7xcinema_icon"' not in manifest:
+if icon_count == 0 and 'android:icon="@drawable/cinema_7xcinema_icon"' not in manifest:
     fail("Could not replace the generated Android launcher icon reference.")
 
 icon_source = ROOT / "mobile" / "public" / "brand" / "7xcinema-icon.png"
@@ -52,7 +52,7 @@ if not icon_source.is_file():
     fail("The official 7xCinema icon asset is missing: " + str(icon_source))
 drawable_dir = ANDROID / "app" / "src" / "main" / "res" / "drawable-nodpi"
 drawable_dir.mkdir(parents=True, exist_ok=True)
-shutil.copy2(icon_source, drawable_dir / "7xcinema_icon.png")
+shutil.copy2(icon_source, drawable_dir / "cinema_7xcinema_icon.png")
 if "android.permission.INTERNET" not in manifest:
     manifest = manifest.replace(
         "<application",
