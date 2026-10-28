@@ -1,15 +1,43 @@
 import { useEffect, useMemo, useState, type FormEvent } from "react";
-import { apiRequest, connectBackend, playInNativePlayer, resetConnection, type CatalogItem, type MediaDetails, type MobilePlaybackResponse, type ProviderOption, type ResolvedPlaybackSource } from "./api";
+import {
+  apiRequest,
+  connectBackend,
+  playInNativePlayer,
+  resetConnection,
+  type CatalogItem,
+  type MediaDetails,
+  type MobilePlaybackResponse,
+  type ProviderOption,
+  type ResolvedPlaybackSource,
+} from "./api";
 
 type Phase = "connecting" | "ready" | "error";
 type ResultFilter = "all" | "movie" | "series";
+type Screen = "home" | "explore" | "list" | "settings";
+
+const FAVORITES_KEY = "7xcinema:favorites:v1";
+const SCREEN_LABELS: Record<Screen, string> = {
+  home: "Home",
+  explore: "Explore",
+  list: "My List",
+  settings: "Settings",
+};
+
+function itemKey(item: CatalogItem): string {
+  return item.id.provider + ":" + item.id.value;
+}
 
 export default function App() {
   const [phase, setPhase] = useState<Phase>("connecting");
   const [providers, setProviders] = useState<ProviderOption[]>([]);
   const [providerId, setProviderId] = useState("moviebox");
+  const [screen, setScreen] = useState<Screen>("home");
   const [query, setQuery] = useState("");
   const [items, setItems] = useState<CatalogItem[]>([]);
+  const [homeItems, setHomeItems] = useState<CatalogItem[]>([]);
+  const [homeLoading, setHomeLoading] = useState(false);
+  const [homeUnavailable, setHomeUnavailable] = useState(false);
+  const [favorites, setFavorites] = useState<CatalogItem[]>([]);
   const [filter, setFilter] = useState<ResultFilter>("all");
   const [searching, setSearching] = useState(false);
   const [details, setDetails] = useState<MediaDetails | null>(null);
@@ -21,6 +49,19 @@ export default function App() {
   const [statusText, setStatusText] = useState("Starting on-device engine");
   const [error, setError] = useState("");
   const [bootAttempt, setBootAttempt] = useState(0);
+
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem(FAVORITES_KEY);
+      if (saved) {
+        const parsed: unknown = JSON.parse(saved);
+        if (Array.isArray(parsed)) setFavorites(parsed as CatalogItem[]);
+      }
+    } catch {
+      // A damaged local list should not stop the app from opening.
+      setFavorites([]);
+    }
+  }, []);
 
   useEffect(() => {
     let active = true;
@@ -35,7 +76,9 @@ export default function App() {
         const choices = await apiRequest<ProviderOption[]>("/api/v1/providers");
         if (!active) return;
         setProviders(choices);
-        const preferred = choices.find((item) => item.id === "moviebox" && item.available) ?? choices.find((item) => item.available);
+        const preferred =
+          choices.find((item) => item.id === "moviebox" && item.available) ??
+          choices.find((item) => item.available);
         if (preferred) setProviderId(preferred.id);
         setPhase("ready");
         setStatusText("On-device engine ready");
@@ -50,15 +93,58 @@ export default function App() {
     return () => { active = false; };
   }, [bootAttempt]);
 
+  useEffect(() => {
+    if (phase !== "ready") return;
+    let active = true;
+    setHomeLoading(true);
+    setHomeUnavailable(false);
+    // The provider already supplies a homepage catalogue. Keep its loading
+    // separate from app startup so a feed outage never blocks search.
+    void apiRequest<{ items: CatalogItem[] }>("/api/v1/homepage?tab=2&page=1")
+      .then((result) => {
+        if (!active) return;
+        setHomeItems(result.items ?? []);
+      })
+      .catch(() => {
+        if (!active) return;
+        setHomeItems([]);
+        setHomeUnavailable(true);
+      })
+      .finally(() => {
+        if (active) setHomeLoading(false);
+      });
+    return () => { active = false; };
+  }, [phase, bootAttempt]);
+
   const visibleItems = useMemo(
     () => filter === "all" ? items : items.filter((item) => item.media_type === filter),
     [filter, items]
   );
+  const availableProviders = useMemo(
+    () => providers.filter((provider) => provider.available),
+    [providers]
+  );
+
+  function toggleFavorite(item: CatalogItem) {
+    setFavorites((current) => {
+      const exists = current.some((favorite) => itemKey(favorite) === itemKey(item));
+      const next = exists
+        ? current.filter((favorite) => itemKey(favorite) !== itemKey(item))
+        : [item, ...current];
+      try { localStorage.setItem(FAVORITES_KEY, JSON.stringify(next)); } catch { /* Storage may be unavailable. */ }
+      return next;
+    });
+  }
+
+  function isFavorite(item: CatalogItem): boolean {
+    return favorites.some((favorite) => itemKey(favorite) === itemKey(item));
+  }
 
   async function submitSearch(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const cleanQuery = query.trim();
     if (!cleanQuery || phase !== "ready" || searching) return;
+    setScreen("explore");
     setSearching(true);
     setError("");
     setDetails(null);
@@ -162,44 +248,210 @@ export default function App() {
     setBootAttempt((attempt) => attempt + 1);
   }
 
+  function renderCard(item: CatalogItem) {
+    const saved = isFavorite(item);
+    return (
+      <article className="media-card" key={itemKey(item)}>
+        <button className="poster-button" type="button" onClick={() => void openDetails(item)} aria-label={"Open details for " + item.title}>
+          <div className="poster-art">
+            {item.poster_url
+              ? <img src={item.poster_url} loading="lazy" alt="" onError={(event) => { event.currentTarget.style.display = "none"; }} />
+              : null}
+            <div className="poster-placeholder"><span>7x</span><small>CINEMA</small></div>
+            <div className="poster-shade" />
+            <span className="poster-type">{item.media_type === "series" ? "SERIES" : "MOVIE"}</span>
+            {item.year && <span className="poster-year">{item.year}</span>}
+            <span className="poster-play" aria-hidden="true">▶</span>
+            <div className="poster-caption">
+              <strong>{item.title}</strong>
+              <span>{item.season_count ? item.season_count + " seasons" : item.year || "Discover"}</span>
+            </div>
+          </div>
+        </button>
+        <button
+          type="button"
+          className={"favorite-toggle" + (saved ? " is-saved" : "")}
+          aria-label={saved ? "Remove from My List" : "Add to My List"}
+          aria-pressed={saved}
+          onClick={() => toggleFavorite(item)}
+        >{saved ? "♥" : "♡"}</button>
+      </article>
+    );
+  }
+
+  const featured = homeItems[0] ?? null;
+  const isSavedFeatured = featured ? isFavorite(featured) : false;
+
   return (
     <div className="app-shell">
       <header className="topbar">
-        <a className="brand" href="#" aria-label="7xCinema home"><span className="brand-mark">7<span>x</span></span><span className="brand-name">7xCinema</span></a>
-        <div className={"engine-status " + phase}><span className="status-dot" /><span>{statusText}</span></div>
+        <button className="brand" type="button" onClick={() => setScreen("home")} aria-label="7xCinema home">
+          <span className="brand-mark">7<span>x</span></span>
+          <span className="brand-name">7xCinema</span>
+        </button>
+        <nav className="desktop-nav" aria-label="Primary navigation">
+          {(["home", "explore", "list", "settings"] as Screen[]).map((destination) => (
+            <button key={destination} type="button" className={screen === destination ? "nav-link active" : "nav-link"} onClick={() => setScreen(destination)}>
+              {SCREEN_LABELS[destination]}
+            </button>
+          ))}
+        </nav>
+        <div className={"engine-status " + phase} title={statusText}><span className="status-dot" /><span>{phase === "ready" ? "Engine ready" : phase === "error" ? "Offline" : "Starting"}</span></div>
       </header>
-      <main>
-        <section className="hero">
-          <div className="hero-copy">
-            <div className="eyebrow"><span /> YOUR NEXT WATCH STARTS HERE</div>
-            <h1>Find the story.<br /><em>Make it a night.</em></h1>
-            <p>Search your connected sources in one clean, local-first cinema experience.</p>
+
+      <main className="app-main">
+        {phase === "error" && (
+          <div className="connection-error">
+            <div><strong>Couldn't connect just yet</strong><span>{error}</span></div>
+            <button type="button" onClick={retryConnection}>Try again</button>
           </div>
-          <div className="hero-art" aria-hidden="true"><div className="art-glow" /><div className="art-screen"><div className="screen-line" /><div className="screen-play">▶</div><div className="screen-foot"><span>7X</span><small>CINEMA</small></div></div><div className="art-disc" /></div>
-        </section>
-        <section className="search-panel" aria-label="Search titles">
-          <div className="search-heading"><div><div className="section-kicker">DISCOVER</div><h2>What are we watching?</h2></div><div className="local-badge">⌑ &nbsp; LOCAL ENGINE</div></div>
-          <form className="search-form" onSubmit={submitSearch}>
-            <label className="search-input-wrap"><span className="search-symbol">⌕</span><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search movies, series, or a title..." aria-label="Search titles" autoComplete="off" /></label>
-            <label className="provider-select-wrap"><span className="provider-label">SOURCE</span><select value={providerId} onChange={(event) => setProviderId(event.target.value)} aria-label="Search source" disabled={phase !== "ready" || providers.length === 0}>{providers.map((provider) => <option key={provider.id} value={provider.id} disabled={!provider.available}>{provider.name}{provider.available ? "" : " · unavailable"}</option>)}</select></label>
-            <button className="search-button" type="submit" disabled={phase !== "ready" || searching || !query.trim()}>{searching ? <span className="spinner" /> : "Search"}{!searching && <span aria-hidden="true"> ↗</span>}</button>
-          </form>
-          {phase === "connecting" && <div className="inline-note"><span className="spinner" /> Starting your on-device source engine…</div>}
-          {phase === "error" && <div className="error-panel"><div><strong>Couldn’t connect just yet.</strong><span>{error}</span></div><button type="button" onClick={retryConnection}>Try again</button></div>}
-          {phase === "ready" && <div className="source-row"><span className="source-check">✓</span><span>{providers.filter((provider) => provider.available).length} sources configured</span><span className="source-separator">•</span><span>Requests stay on your device</span></div>}
-        </section>
-        <section className="results-section">
-          <div className="results-heading"><div><div className="section-kicker">{items.length ? "YOUR RESULTS" : "READY WHEN YOU ARE"}</div><h2>{items.length ? "Choose your next watch" : "A world of stories, one search away"}</h2></div>
-            {items.length > 0 && <div className="filter-group" aria-label="Filter results"><button className={filter === "all" ? "active" : ""} onClick={() => setFilter("all")} type="button">All</button><button className={filter === "movie" ? "active" : ""} onClick={() => setFilter("movie")} type="button">Movies</button><button className={filter === "series" ? "active" : ""} onClick={() => setFilter("series")} type="button">Series</button></div>}
-          </div>
-          {error && phase === "ready" && <div className="error-inline">{error}</div>}
-          {visibleItems.length ? <div className="title-grid">{visibleItems.map((item) => <button className="title-card" key={item.id.provider + ":" + item.id.value} type="button" onClick={() => void openDetails(item)} aria-label={"Show details for " + item.title}>
-            <div className="poster">{item.poster_url ? <img src={item.poster_url} loading="lazy" alt="" onError={(event) => { event.currentTarget.style.display = "none"; }} /> : null}<div className="poster-fallback"><span>7x</span><small>CINEMA</small></div><span className="media-pill">{item.media_type === "series" ? "SERIES" : "MOVIE"}</span><span className="poster-open">↗</span></div>
-            <div className="card-meta"><strong>{item.title}</strong><span>{item.year || "Year not listed"}{item.season_count ? " · " + item.season_count + " seasons" : ""}</span></div>
-          </button>)}</div> : <div className="empty-state"><div className="empty-icon">✳</div><h3>{items.length ? "Nothing in this category" : "Your next favourite is out there"}</h3><p>{items.length ? "Try another filter to see more results." : "Enter a title above and 7xCinema will search the selected source from your device."}</p></div>}
-        </section>
-        <footer className="footer"><span className="footer-logo">7xCinema</span><span>Local-first by design</span><span className="footer-dot">•</span><span>Source availability can vary</span></footer>
+        )}
+
+        {screen === "home" && (
+          <section className="home-screen">
+            <div className="home-heading">
+              <div className="eyebrow"><span /> YOUR NEXT MOVIE NIGHT</div>
+              <h1>Stories worth <em>staying up for.</em></h1>
+              <p>Movies, series and anime—together in your cinema.</p>
+            </div>
+
+            {featured ? (
+              <section className="featured-hero" aria-label="Featured title">
+                {featured.poster_url && <img className="featured-image" src={featured.poster_url} alt="" onError={(event) => { event.currentTarget.style.display = "none"; }} />}
+                <div className="featured-overlay" />
+                <div className="featured-content">
+                  <span className="featured-kicker"><i /> 7XCINEMA SPOTLIGHT</span>
+                  <span className="featured-type">{featured.media_type === "series" ? "FEATURED SERIES" : "FEATURED MOVIE"}{featured.year ? " · " + featured.year : ""}</span>
+                  <h2>{featured.title}</h2>
+                  <p>Picked from your connected catalogue. Open the title to see details and available playback options.</p>
+                  <div className="featured-actions">
+                    <button className="primary-button" type="button" onClick={() => void openDetails(featured)}><span>▶</span> Watch now</button>
+                    <button className={"secondary-button" + (isSavedFeatured ? " is-saved" : "")} type="button" onClick={() => toggleFavorite(featured)}>{isSavedFeatured ? "♥ Added to My List" : "♡ Add to My List"}</button>
+                  </div>
+                </div>
+                <div className="featured-count"><span>01</span><i /> SPOTLIGHT</div>
+              </section>
+            ) : (
+              <section className="featured-hero featured-empty">
+                <div className="featured-orb orb-one" /><div className="featured-orb orb-two" />
+                <div className="featured-content">
+                  <span className="featured-kicker"><i /> YOUR PERSONAL CINEMA</span>
+                  <h2>{homeLoading ? "Finding your next watch…" : "Your next favourite is waiting."}</h2>
+                  <p>{homeUnavailable ? "The home feed isn't available right now, but search still works." : "Explore connected sources and build a list of the titles you want to watch."}</p>
+                  <div className="featured-actions">
+                    <button className="primary-button" type="button" onClick={() => setScreen("explore")}>Explore titles <span>↗</span></button>
+                    <button className="secondary-button" type="button" onClick={() => void retryConnection()}>Refresh engine</button>
+                  </div>
+                </div>
+              </section>
+            )}
+
+            <div className="quick-actions">
+              <button type="button" onClick={() => { setFilter("movie"); setScreen("explore"); }}><span className="quick-icon">▣</span><span><b>Movies</b><small>Feature films</small></span><span className="quick-arrow">↗</span></button>
+              <button type="button" onClick={() => { setFilter("series"); setScreen("explore"); }}><span className="quick-icon">▤</span><span><b>Series & anime</b><small>Episode by episode</small></span><span className="quick-arrow">↗</span></button>
+              <button type="button" onClick={() => setScreen("list")}><span className="quick-icon">♡</span><span><b>My List</b><small>{favorites.length} saved titles</small></span><span className="quick-arrow">↗</span></button>
+            </div>
+
+            <section className="shelf-section">
+              <div className="shelf-heading">
+                <div><span className="section-eyebrow">FROM YOUR SOURCES</span><h2>Discover picks</h2></div>
+                <button type="button" className="text-link" onClick={() => setScreen("explore")}>Explore all <span>↗</span></button>
+              </div>
+              {homeLoading && homeItems.length === 0
+                ? <div className="loading-shelf"><span className="spinner" /> Loading the catalogue…</div>
+                : homeItems.length > 0
+                  ? <div className="media-shelf">{homeItems.slice(1, 13).map(renderCard)}</div>
+                  : <div className="shelf-empty"><span>✦</span><p>{homeUnavailable ? "The catalogue feed could not load. You can still search any connected source." : "Your catalogue will appear here."}</p><button type="button" onClick={() => setScreen("explore")}>Start exploring</button></div>}
+            </section>
+
+            {favorites.length > 0 && (
+              <section className="shelf-section">
+                <div className="shelf-heading">
+                  <div><span className="section-eyebrow">SAVED FOR LATER</span><h2>My List</h2></div>
+                  <button type="button" className="text-link" onClick={() => setScreen("list")}>View list <span>↗</span></button>
+                </div>
+                <div className="media-shelf">{favorites.slice(0, 10).map(renderCard)}</div>
+              </section>
+            )}
+          </section>
+        )}
+
+        {screen === "explore" && (
+          <section className="explore-screen page-screen">
+            <div className="page-heading">
+              <div className="eyebrow"><span /> FIND YOUR NEXT WATCH</div>
+              <h1>Explore <em>the catalogue.</em></h1>
+              <p>Search by title across your connected providers.</p>
+            </div>
+            <section className="search-panel" aria-label="Search titles">
+              <form className="search-form" onSubmit={submitSearch}>
+                <label className="search-input-wrap"><span className="search-symbol">⌕</span><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search movies, series or anime…" aria-label="Search titles" autoComplete="off" /></label>
+                <label className="provider-select-wrap"><span className="provider-label">SOURCE</span><select value={providerId} onChange={(event) => setProviderId(event.target.value)} aria-label="Search source" disabled={phase !== "ready" || providers.length === 0}>{providers.map((provider) => <option key={provider.id} value={provider.id} disabled={!provider.available}>{provider.name}{provider.available ? "" : " · unavailable"}</option>)}</select></label>
+                <button className="search-button" type="submit" disabled={phase !== "ready" || searching || !query.trim()}>{searching ? <span className="spinner" /> : "Search"}{!searching && <span aria-hidden="true"> ↗</span>}</button>
+              </form>
+              {phase === "connecting" && <div className="inline-note"><span className="spinner" /> Starting your on-device source engine…</div>}
+              {phase === "ready" && <div className="source-row"><span className="source-check">✓</span><span>{availableProviders.length} sources available</span><span className="source-separator">•</span><span>Local-first browsing</span></div>}
+            </section>
+            {error && phase === "ready" && <div className="error-inline">{error}</div>}
+            <div className="results-heading">
+              <div><span className="section-eyebrow">{items.length ? "SEARCH RESULTS" : "READY WHEN YOU ARE"}</span><h2>{items.length ? "Choose your next watch" : "What are we in the mood for?"}</h2></div>
+              {items.length > 0 && <div className="filter-group" aria-label="Filter results"><button className={filter === "all" ? "active" : ""} onClick={() => setFilter("all")} type="button">All</button><button className={filter === "movie" ? "active" : ""} onClick={() => setFilter("movie")} type="button">Movies</button><button className={filter === "series" ? "active" : ""} onClick={() => setFilter("series")} type="button">Series</button></div>}
+            </div>
+            {visibleItems.length > 0
+              ? <div className="title-grid">{visibleItems.map(renderCard)}</div>
+              : <div className="empty-state"><div className="empty-icon">✳</div><h3>{items.length ? "Nothing in this category" : searching ? "Searching…" : "A world of stories, one search away"}</h3><p>{items.length ? "Try another filter to see more results." : "Enter a title above to search the selected source directly from your device."}</p>{!searching && !items.length && <button className="secondary-button" type="button" onClick={() => setScreen("home")}>Back to Home</button>}</div>}
+          </section>
+        )}
+
+        {screen === "list" && (
+          <section className="page-screen list-screen">
+            <div className="page-heading">
+              <div className="eyebrow"><span /> YOUR PERSONAL COLLECTION</div>
+              <h1>My <em>List.</em></h1>
+              <p>Keep your next watch close. Your list is saved on this device.</p>
+            </div>
+            {favorites.length > 0
+              ? <div className="title-grid">{favorites.map(renderCard)}</div>
+              : <div className="empty-state list-empty"><div className="empty-icon">♡</div><h3>Your list starts here</h3><p>Tap the heart on any movie or series to save it here for later.</p><button className="primary-button" type="button" onClick={() => setScreen("explore")}>Explore titles <span>↗</span></button></div>}
+          </section>
+        )}
+
+        {screen === "settings" && (
+          <section className="page-screen settings-screen">
+            <div className="page-heading">
+              <div className="eyebrow"><span /> MAKE IT YOURS</div>
+              <h1>App <em>settings.</em></h1>
+              <p>Manage your source preference and on-device engine.</p>
+            </div>
+            <section className="settings-group">
+              <div className="settings-group-title"><span className="settings-icon">◈</span><div><h2>Preferred source</h2><p>Used when you open Explore.</p></div></div>
+              <label className="settings-select"><span>SEARCH PROVIDER</span><select value={providerId} onChange={(event) => setProviderId(event.target.value)} disabled={phase !== "ready"}>{providers.map((provider) => <option key={provider.id} value={provider.id} disabled={!provider.available}>{provider.name}{provider.available ? "" : " · unavailable"}</option>)}</select></label>
+              <div className="provider-list">{providers.map((provider) => <div className="provider-row" key={provider.id}><span className={"provider-status" + (provider.available ? " online" : "")} /><span className="provider-name">{provider.name}</span><span className="provider-state">{provider.available ? "Available" : "Unavailable"}</span></div>)}</div>
+            </section>
+            <section className="settings-group">
+              <div className="settings-group-title"><span className="settings-icon">⌘</span><div><h2>On-device engine</h2><p>Your provider requests run locally on this device.</p></div></div>
+              <div className="engine-detail"><span className={"engine-pill " + phase}><i />{phase === "ready" ? "Connected" : phase === "connecting" ? "Connecting" : "Disconnected"}</span><button className="secondary-button" type="button" onClick={retryConnection}>Restart engine</button></div>
+            </section>
+            <div className="settings-footer"><span className="brand-mark small-mark">7<span>x</span></span><div><strong>7xCinema</strong><span>Built for your next watch.</span></div><span className="version-label">ANDROID · ARM64</span></div>
+          </section>
+        )}
+        <footer className="app-footer"><span className="footer-logo">7xCinema</span><span>Local-first by design</span><span className="footer-dot">•</span><span>Source availability can vary</span></footer>
       </main>
+
+      <nav className="bottom-nav" aria-label="Mobile navigation">
+        {([
+          ["home", "⌂"],
+          ["explore", "⌕"],
+          ["list", "♡"],
+          ["settings", "⚙"],
+        ] as [Screen, string][]).map(([destination, icon]) => (
+          <button key={destination} type="button" className={screen === destination ? "bottom-nav-item active" : "bottom-nav-item"} aria-current={screen === destination ? "page" : undefined} onClick={() => setScreen(destination)}>
+            <span className="bottom-nav-icon" aria-hidden="true">{icon}</span><span>{SCREEN_LABELS[destination]}</span>
+            {screen === destination && <i className="nav-active-mark" />}
+          </button>
+        ))}
+      </nav>
+
       {details && <div className="modal-backdrop" role="presentation" onClick={() => setDetails(null)}><section className="details-modal" role="dialog" aria-modal="true" aria-label={details.title} onClick={(event) => event.stopPropagation()}>
         <button className="modal-close" type="button" onClick={() => setDetails(null)} aria-label="Close details">×</button>
         <div className="details-poster">{details.poster_url ? <img src={details.poster_url} alt="" /> : <div className="poster-fallback"><span>7x</span><small>CINEMA</small></div>}</div>
