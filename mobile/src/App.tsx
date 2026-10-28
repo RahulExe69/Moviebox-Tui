@@ -510,7 +510,7 @@ export default function App() {
               <div className="settings-group-title"><span className="settings-icon">⌘</span><div><h2>On-device engine</h2><p>Your provider requests run locally on this device.</p></div></div>
               <div className="engine-detail"><span className={"engine-pill " + phase}><i />{phase === "ready" ? "Connected" : phase === "connecting" ? "Connecting" : "Disconnected"}</span><button className="secondary-button" type="button" onClick={retryConnection}>Restart engine</button></div>
             </section>
-            <div className="settings-footer"><span className="brand-mark small-mark">7<span>x</span></span><div><strong>7xCinema</strong><span>Built for your next watch.</span></div><span className="version-label">ANDROID · ARM64</span></div>
+            <div className="settings-footer"><span className="brand-mark small-mark"><img src="/brand/7xcinema-icon.png" alt="" /></span><div><strong><img className="settings-wordmark" src="/brand/7xcinema-wordmark.png" alt="7xCinema" /></strong><span>Built for your next watch.</span></div><span className="version-label">ANDROID · ARM64</span></div>
           </section>
         )}
         <footer className="app-footer"><span className="footer-logo">7xCinema</span><span>Local-first by design</span><span className="footer-dot">•</span><span>Source availability can vary</span></footer>

@@ -170,6 +170,7 @@ button:focus-visible,input:focus-visible,select:focus-visible{outline:2px solid 
 .engine-pill.ready i{background:#55d9d1}
 .engine-pill.error{color:#ffb078}
 .engine-pill.error i{background:#ff645e}
+.settings-wordmark{display:block;width:104px;height:24px;object-fit:contain;object-position:left center}
 .settings-footer{display:flex;align-items:center;gap:10px;margin-top:19px;padding:15px 4px;border-top:1px solid rgba(246,191,88,.12)}
 .settings-footer>div{display:flex;flex-direction:column;gap:4px}
 .settings-footer strong{color:#e6e4d9;font-size:11px}
