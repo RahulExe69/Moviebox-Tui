@@ -40,8 +40,8 @@ manifest = manifest_path.read_text(encoding="utf-8")
 # Capacitor generates a generic launcher icon each time the Android project is
 # scaffolded. Replace it with the original 7xCinema cinema-gold/teal mark.
 manifest, icon_count = re.subn(
-    r'(android:(?:roundIcon|icon)\\s*=\\s*)"@mipmap/[^"]+"',
-    r'\\1"@drawable/ic_7xcinema_launcher"',
+    r'(android:(?:roundIcon|icon)\s*=\s*)"@mipmap/[^"]+"',
+    r'\1"@drawable/ic_7xcinema_launcher"',
     manifest,
 )
 if icon_count == 0 and 'android:icon="@drawable/ic_7xcinema_launcher"' not in manifest:
