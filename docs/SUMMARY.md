@@ -20,6 +20,7 @@
 
 - [System Architecture](architecture.md)
 - [Module Breakdown](modules.md)
+- [Native Android App Plan](ANDROID_APP_PLAN.md)
 - [Caching Strategy](cache.md)
 - [Logging System](logging.md)
 - [Cross-Platform Operations](cross-platform.md)

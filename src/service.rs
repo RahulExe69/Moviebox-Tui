@@ -2,12 +2,15 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use crate::models::BrowseMetrics;
-use crate::providers::Provider;
 use crate::providers::bdix::circleftp::CircleFtpClient;
 use crate::providers::bdix::dhakaflix::client::DhakaFlixClient;
 use crate::providers::fourkhdhub::FourKHdHubClient;
-use crate::providers::models::{CatalogItem, MediaDetails, ProviderError, ProviderKind};
+use crate::providers::models::{
+    CatalogItem, MediaDetails, PlaybackSource, ProviderError, ProviderKind, Release,
+    ResolutionIntent,
+};
 use crate::providers::moviebox::client::MovieBoxClient;
+use crate::providers::{Provider, ReleaseProvider};
 
 #[derive(Clone)]
 pub struct MovieBoxService {
@@ -159,6 +162,138 @@ impl MovieBoxService {
             ProviderKind::Addons => Provider::details(&self.addon_client, subject_id).await,
             ProviderKind::Dramachi => Provider::details(&self.dramachi_client, subject_id).await,
         }
+    }
+
+    /// Load playable releases using the same provider paths as the terminal UI.
+    /// This returns candidate releases and their mirror metadata; resolving a
+    /// provider-specific embed is a separate, on-demand operation.
+    pub async fn releases_typed(
+        &self,
+        provider: ProviderKind,
+        subject_id: &str,
+        season: usize,
+        episode: usize,
+    ) -> Result<Vec<Release>, ProviderError> {
+        let releases = match provider {
+            ProviderKind::MovieBox => {
+                ReleaseProvider::episode_streams(&self.client, subject_id, season, episode).await?
+            }
+            ProviderKind::FourKHdHub => {
+                let client = self.fourk_client.as_ref().ok_or_else(|| {
+                    ProviderError::Unavailable("4KHDHub is unavailable".to_string())
+                })?;
+                ReleaseProvider::episode_streams(client, subject_id, season, episode).await?
+            }
+            ProviderKind::BdixCircleFtp => {
+                ReleaseProvider::episode_streams(
+                    &self.circleftp_client,
+                    subject_id,
+                    season,
+                    episode,
+                )
+                .await?
+            }
+            ProviderKind::BdixDhakaFlix => {
+                ReleaseProvider::episode_streams(
+                    &self.dhakaflix_client,
+                    subject_id,
+                    season,
+                    episode,
+                )
+                .await?
+            }
+            ProviderKind::Dramachi => {
+                ReleaseProvider::episode_streams(&self.dramachi_client, subject_id, season, episode)
+                    .await?
+            }
+            ProviderKind::Addons => {
+                let addons = tokio::task::spawn_blocking(crate::config::load_addons)
+                    .await
+                    .unwrap_or_default();
+                if !addons
+                    .iter()
+                    .any(|addon| addon.enabled && addon.provides_stream)
+                {
+                    return Err(ProviderError::Unavailable(
+                        "No stream addons enabled. Configure a stream addon first.".to_string(),
+                    ));
+                }
+                let is_series = self
+                    .details_typed(provider, subject_id)
+                    .await
+                    .map(|details| details.is_series())
+                    .unwrap_or_else(|_| {
+                        subject_id.to_ascii_lowercase().starts_with("series:")
+                            || season > 0
+                            || episode > 0
+                    });
+                let (releases, _blocked_addons) = crate::providers::addons::aggregate_streams(
+                    &self.addon_client,
+                    &addons,
+                    subject_id,
+                    season,
+                    episode,
+                    is_series,
+                )
+                .await;
+                releases
+            }
+        };
+
+        if releases.is_empty() {
+            return Err(ProviderError::Unavailable(
+                "No stream sources available".to_string(),
+            ));
+        }
+        Ok(releases)
+    }
+
+    /// Resolve one provider-returned release into a stream URL with request metadata.
+    /// No caller-supplied URL is fetched: the release is selected from provider output.
+    pub async fn resolve_release_typed(
+        &self,
+        provider: ProviderKind,
+        release: &Release,
+    ) -> Result<PlaybackSource, ProviderError> {
+        if release.provider != provider {
+            return Err(ProviderError::Unavailable(
+                "Release provider does not match the selected source".to_string(),
+            ));
+        }
+
+        let source = if provider == ProviderKind::FourKHdHub {
+            let client = self
+                .fourk_client
+                .as_ref()
+                .ok_or_else(|| ProviderError::Unavailable("4KHDHub is unavailable".to_string()))?;
+            client
+                .resolve_release(release, ResolutionIntent::Playback)
+                .await
+                .map_err(ProviderError::from)?
+        } else {
+            let mirror = release.mirrors.first().ok_or_else(|| {
+                ProviderError::Unavailable("No playable mirror was found".to_string())
+            })?;
+            PlaybackSource {
+                provider,
+                url: mirror.resolver_url.clone(),
+                headers: mirror.headers.clone(),
+                subtitle: None,
+                source_label: mirror.label.clone(),
+                max_height: Some(release.resolution_u64()).filter(|height| *height > 0),
+            }
+        };
+
+        let parsed = url::Url::parse(&source.url).map_err(|_| {
+            ProviderError::Unavailable("Provider returned an invalid playback URL".to_string())
+        })?;
+        if !matches!(parsed.scheme(), "http" | "https") || parsed.host_str().is_none() {
+            return Err(ProviderError::Unavailable(
+                "Only HTTP and HTTPS playback URLs are supported".to_string(),
+            ));
+        }
+
+        Ok(source)
     }
 
     pub async fn homepage(

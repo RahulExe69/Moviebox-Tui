@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" role="img" aria-labelledby="title">
+  <title id="title">7xCinema</title>
+  <defs>
+    <linearGradient id="gold" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#ffe1a6"/>
+      <stop offset=".52" stop-color="#f6bf58"/>
+      <stop offset="1" stop-color="#df872f"/>
+    </linearGradient>
+    <linearGradient id="teal" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#8af1e8"/>
+      <stop offset="1" stop-color="#35afa9"/>
+    </linearGradient>
+  </defs>
+  <rect x="4" y="4" width="120" height="120" rx="28" fill="#080c15" stroke="#273953" stroke-width="2"/>
+  <path d="M22 25h84a8 8 0 0 1 8 8v52a8 8 0 0 1-8 8H22a8 8 0 0 1-8-8V33a8 8 0 0 1 8-8Z" fill="#101a2b" stroke="url(#gold)" stroke-width="3"/>
+  <path d="M23 25v68M105 25v68" stroke="#55d9d1" stroke-width="3" stroke-dasharray="5 6" opacity=".95"/>
+  <path d="M47 39 82 58.5 47 78Z" fill="url(#gold)" stroke="#fff3d5" stroke-width="2" stroke-linejoin="round"/>
+  <path d="M35 101h58" stroke="url(#teal)" stroke-width="3" stroke-linecap="round"/>
+  <text x="64" y="116" text-anchor="middle" font-family="Arial,Helvetica,sans-serif" font-size="18" font-weight="900" letter-spacing="1" fill="#fff3d5">7xC</text>
+</svg>
