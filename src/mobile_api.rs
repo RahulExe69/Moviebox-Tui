@@ -180,7 +180,11 @@ impl MobileApi {
         let mut movie_title: Option<String> = None;
         let mut candidate_ids = vec![media_id.to_string()];
         if requested_provider == ProviderKind::MovieBox {
-            if let Ok(details) = self.service.details_typed(requested_provider, media_id).await {
+            if let Ok(details) = self
+                .service
+                .details_typed(requested_provider, media_id)
+                .await
+            {
                 movie_title = Some(details.title.clone());
                 for sibling_id in details.sibling_ids() {
                     if !sibling_id.trim().is_empty() && !candidate_ids.contains(&sibling_id) {
@@ -190,8 +194,7 @@ impl MobileApi {
             }
         }
 
-        let mut last_error =
-            ProviderError::Unavailable("No stream sources available".to_string());
+        let mut last_error = ProviderError::Unavailable("No stream sources available".to_string());
         let mut found: Option<(ProviderKind, String, Vec<Release>)> = None;
 
         for candidate_id in candidate_ids {
@@ -247,20 +250,12 @@ impl MobileApi {
                         }
                         match self
                             .service
-                            .releases_typed(
-                                alternate_provider,
-                                &item.id.value,
-                                season,
-                                episode,
-                            )
+                            .releases_typed(alternate_provider, &item.id.value, season, episode)
                             .await
                         {
                             Ok(candidate_releases) if !candidate_releases.is_empty() => {
-                                found = Some((
-                                    alternate_provider,
-                                    item.id.value,
-                                    candidate_releases,
-                                ));
+                                found =
+                                    Some((alternate_provider, item.id.value, candidate_releases));
                                 break;
                             }
                             Ok(_) => {
