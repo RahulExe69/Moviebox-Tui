@@ -7,6 +7,7 @@ import com.getcapacitor.PluginMethod;
 import com.getcapacitor.annotation.CapacitorPlugin;
 import android.content.Intent;
 import android.net.Uri;
+import org.json.JSONArray;
 import org.json.JSONObject;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -47,13 +48,7 @@ public final class MobileBackendPlugin extends Plugin {
     @PluginMethod
     public void playVideo(PluginCall call) {
         String url = call.getString("url");
-        if (url == null || url.trim().isEmpty()) {
-            call.reject("A playback URL is required.");
-            return;
-        }
-        Uri uri = Uri.parse(url.trim());
-        String scheme = uri.getScheme();
-        if (uri.getHost() == null || !("http".equalsIgnoreCase(scheme) || "https".equalsIgnoreCase(scheme))) {
+        if (!isHttpUrl(url)) {
             call.reject("Only HTTP and HTTPS playback URLs are supported.");
             return;
         }
@@ -61,17 +56,58 @@ public final class MobileBackendPlugin extends Plugin {
         String title = call.getString("title", "7xCinema");
         String subtitleUrl = call.getString("subtitleUrl");
         JSObject headers = call.getObject("headers");
+        JSONArray candidates = new JSONArray();
+        JSONArray supplied = call.getData().optJSONArray("sources");
+
+        if (supplied != null) {
+            for (int index = 0; index < supplied.length(); index++) {
+                JSONObject source = supplied.optJSONObject(index);
+                if (source == null) continue;
+                String sourceUrl = source.optString("url", "");
+                if (!isHttpUrl(sourceUrl)) continue;
+                try {
+                    JSONObject normalized = new JSONObject();
+                    normalized.put("url", sourceUrl.trim());
+                    JSONObject sourceHeaders = source.optJSONObject("headers");
+                    normalized.put("headers", sourceHeaders == null ? new JSONObject() : sourceHeaders);
+                    normalized.put("label", source.optString("label", "Source " + (index + 1)));
+                    String sourceSubtitle = source.optString("subtitleUrl", "");
+                    if (!sourceSubtitle.isEmpty() && isHttpUrl(sourceSubtitle)) {
+                        normalized.put("subtitleUrl", sourceSubtitle.trim());
+                    }
+                    candidates.put(normalized);
+                } catch (Exception ignored) {
+                    // Skip an invalid candidate without blocking remaining mirrors.
+                }
+            }
+        }
+
+        if (candidates.length() == 0) {
+            JSONObject first = new JSONObject();
+            try {
+                first.put("url", url.trim());
+                first.put("headers", headers == null ? new JSONObject() : new JSONObject(headers.toString()));
+                if (subtitleUrl != null && !subtitleUrl.trim().isEmpty()) {
+                    if (!isHttpUrl(subtitleUrl)) {
+                        call.reject("Only HTTP and HTTPS subtitle URLs are supported.");
+                        return;
+                    }
+                    first.put("subtitleUrl", subtitleUrl.trim());
+                }
+                first.put("label", "Selected source");
+                candidates.put(first);
+            } catch (Exception error) {
+                call.reject("Could not prepare playback sources.");
+                return;
+            }
+        }
+
         Intent intent = new Intent(getActivity(), PlayerActivity.class);
         intent.putExtra("media_url", url.trim());
         intent.putExtra("media_title", title == null ? "7xCinema" : title);
         intent.putExtra("media_headers", headers == null ? "{}" : headers.toString());
-        if (subtitleUrl != null && !subtitleUrl.trim().isEmpty()) {
-            Uri subtitle = Uri.parse(subtitleUrl.trim());
-            String subtitleScheme = subtitle.getScheme();
-            if (subtitle.getHost() == null || !("http".equalsIgnoreCase(subtitleScheme) || "https".equalsIgnoreCase(subtitleScheme))) {
-                call.reject("Only HTTP and HTTPS subtitle URLs are supported.");
-                return;
-            }
+        intent.putExtra("media_sources", candidates.toString());
+        if (subtitleUrl != null && !subtitleUrl.trim().isEmpty() && isHttpUrl(subtitleUrl)) {
             intent.putExtra("subtitle_url", subtitleUrl.trim());
         }
 
@@ -83,6 +119,13 @@ public final class MobileBackendPlugin extends Plugin {
                 call.reject("Could not open the 7xCinema player.");
             }
         });
+    }
+
+    private static boolean isHttpUrl(String value) {
+        if (value == null || value.trim().isEmpty()) return false;
+        Uri uri = Uri.parse(value.trim());
+        String scheme = uri.getScheme();
+        return uri.getHost() != null && ("http".equalsIgnoreCase(scheme) || "https".equalsIgnoreCase(scheme));
     }
 
     @PluginMethod

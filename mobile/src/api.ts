@@ -49,11 +49,18 @@ export interface ResolvedPlaybackSource {
   source_label: string;
   max_height?: number | null;
 }
+export interface NativeStreamSource {
+  url: string;
+  headers: Record<string, string>;
+  subtitleUrl?: string;
+  label?: string;
+}
 export interface NativePlayerOptions {
   url: string;
   title: string;
   headers: Record<string, string>;
   subtitleUrl?: string;
+  sources?: NativeStreamSource[];
 }
 export interface MediaDetails {
   id: { provider: string; value: string };

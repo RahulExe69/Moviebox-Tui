@@ -241,6 +241,7 @@ export default function App() {
 
       const subtitleIndex = selectedSubtitleIndex === "" ? undefined : Number(selectedSubtitleIndex);
       const failures: string[] = [];
+      const resolvedSources: NativeStreamSource[] = [];
       for (let index = 0; index < candidates.releases.length; index += 1) {
         try {
           const source = await apiRequest<ResolvedPlaybackSource>("/api/v1/playback/resolve", {
@@ -254,18 +255,28 @@ export default function App() {
               ...(subtitleIndex === undefined ? {} : { subtitle_index: subtitleIndex })
             })
           });
-          await playInNativePlayer({
+          resolvedSources.push({
             url: source.url,
-            title: details.title,
             headers: Object.fromEntries(source.headers),
+            label: source.source_label || candidates.releases[index]?.filename || "Stream source",
             ...(source.subtitle ? { subtitleUrl: source.subtitle } : {})
           });
-          return;
         } catch (reason) {
-          failures.push(reason instanceof Error ? reason.message : "Source could not be opened");
+          failures.push(reason instanceof Error ? reason.message : "Source could not be resolved");
         }
       }
-      throw new Error(failures[0] || "No source could be opened. Try another title or source.");
+
+      if (!resolvedSources.length) {
+        throw new Error(failures[0] || "No source could be resolved. Try another title or provider.");
+      }
+
+      await playInNativePlayer({
+        url: resolvedSources[0].url,
+        title: details.title,
+        headers: resolvedSources[0].headers,
+        ...(resolvedSources[0].subtitleUrl ? { subtitleUrl: resolvedSources[0].subtitleUrl } : {}),
+        sources: resolvedSources
+      });
     } catch (reason) {
       setPlaybackError(reason instanceof Error ? reason.message : "Could not start playback.");
     } finally {
