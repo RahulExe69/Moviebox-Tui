@@ -232,7 +232,7 @@ fn append_unique_releases(
 ) {
     for (release_index, release) in candidates.into_iter().enumerate() {
         let key = format!(
-            "{}|{}|{}|{}|{}|{}",
+            "{}|{}|{}|{}|{}",
             release.filename,
             release.quality.as_deref().unwrap_or_default(),
             release.language.as_deref().unwrap_or_default(),
