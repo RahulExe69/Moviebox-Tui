@@ -424,6 +424,8 @@ export default function App() {
 
   const featured = homeItems[0] ?? null;
   const isSavedFeatured = featured ? isFavorite(featured) : false;
+  const homeMovies = useMemo(() => homeItems.filter((item) => item.media_type === "movie"), [homeItems]);
+  const homeSeries = useMemo(() => homeItems.filter((item) => item.media_type === "series"), [homeItems]);
 
   return (
     <div className="app-shell">
@@ -490,14 +492,14 @@ export default function App() {
             )}
 
             <div className="quick-actions">
-              <button type="button" onClick={() => { setFilter("movie"); setScreen("explore"); }}><span className="quick-icon">▣</span><span><b>Movies</b><small>Feature films</small></span><span className="quick-arrow">↗</span></button>
-              <button type="button" onClick={() => { setFilter("series"); setScreen("explore"); }}><span className="quick-icon">▤</span><span><b>Series & anime</b><small>Episode by episode</small></span><span className="quick-arrow">↗</span></button>
+              <button type="button" onClick={() => { setItems(homeMovies.length ? homeMovies : items); setFilter("movie"); setScreen("explore"); }}><span className="quick-icon">▣</span><span><b>Movies</b><small>Feature films</small></span><span className="quick-arrow">↗</span></button>
+              <button type="button" onClick={() => { setItems(homeSeries.length ? homeSeries : items); setFilter("series"); setScreen("explore"); }}><span className="quick-icon">▤</span><span><b>Series & anime</b><small>Episode by episode</small></span><span className="quick-arrow">↗</span></button>
               <button type="button" onClick={() => setScreen("list")}><span className="quick-icon">♡</span><span><b>My List</b><small>{favorites.length} saved titles</small></span><span className="quick-arrow">↗</span></button>
             </div>
 
             <section className="shelf-section">
               <div className="shelf-heading">
-                <div><span className="section-eyebrow">FROM YOUR SOURCES</span><h2>Discover picks</h2></div>
+                <div><span className="section-eyebrow">CURATED HOME FEED</span><h2>Recommended picks</h2></div>
                 <button type="button" className="text-link" onClick={() => setScreen("explore")}>Explore all <span>↗</span></button>
               </div>
               {homeLoading && homeItems.length === 0
@@ -506,6 +508,26 @@ export default function App() {
                   ? <div className="media-shelf">{homeItems.slice(1, 13).map(renderCard)}</div>
                   : <div className="shelf-empty"><span>✦</span><p>{homeUnavailable ? "The catalogue feed could not load. You can still search any connected source." : "Your catalogue will appear here."}</p><button type="button" onClick={() => setScreen("explore")}>Start exploring</button></div>}
             </section>
+
+            {homeMovies.length > 0 && (
+              <section className="shelf-section">
+                <div className="shelf-heading">
+                  <div><span className="section-eyebrow">FEATURE FILMS</span><h2>Movies</h2></div>
+                  <button type="button" className="text-link" onClick={() => { setItems(homeMovies); setFilter("movie"); setScreen("explore"); }}>View all <span>↗</span></button>
+                </div>
+                <div className="media-shelf">{homeMovies.slice(0, 12).map(renderCard)}</div>
+              </section>
+            )}
+
+            {homeSeries.length > 0 && (
+              <section className="shelf-section">
+                <div className="shelf-heading">
+                  <div><span className="section-eyebrow">BINGE-WORTHY STORIES</span><h2>Series & anime</h2></div>
+                  <button type="button" className="text-link" onClick={() => { setItems(homeSeries); setFilter("series"); setScreen("explore"); }}>View all <span>↗</span></button>
+                </div>
+                <div className="media-shelf">{homeSeries.slice(0, 12).map(renderCard)}</div>
+              </section>
+            )}
 
             {favorites.length > 0 && (
               <section className="shelf-section">
