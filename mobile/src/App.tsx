@@ -31,7 +31,7 @@ function itemKey(item: CatalogItem): string {
 export default function App() {
   const [phase, setPhase] = useState<Phase>("connecting");
   const [providers, setProviders] = useState<ProviderOption[]>([]);
-  const [providerId, setProviderId] = useState("moviebox");
+  const [providerId, setProviderId] = useState("all");
   const [screen, setScreen] = useState<Screen>("home");
   const [query, setQuery] = useState("");
   const [items, setItems] = useState<CatalogItem[]>([]);
@@ -48,6 +48,7 @@ export default function App() {
   const [selectedSubtitleIndex, setSelectedSubtitleIndex] = useState("");
   const [playbackError, setPlaybackError] = useState("");
   const [selectedEpisode, setSelectedEpisode] = useState<{ season: number; episode: number } | null>(null);
+  const [openingItemKey, setOpeningItemKey] = useState<string | null>(null);
   const [statusText, setStatusText] = useState("Starting on-device engine");
   const [error, setError] = useState("");
   const [bootAttempt, setBootAttempt] = useState(0);
@@ -78,10 +79,7 @@ export default function App() {
         const choices = await apiRequest<ProviderOption[]>("/api/v1/providers");
         if (!active) return;
         setProviders(choices);
-        const preferred =
-          choices.find((item) => item.id === "moviebox" && item.available) ??
-          choices.find((item) => item.available);
-        if (preferred) setProviderId(preferred.id);
+        setProviderId("all");
         setPhase("ready");
         setStatusText("On-device engine ready");
       } catch (reason) {
@@ -159,7 +157,7 @@ export default function App() {
         body: JSON.stringify({ provider: providerId, query: cleanQuery, page: 1 })
       });
       setItems(results);
-      setStatusText(results.length ? results.length + " results found" : "No results on this source");
+      setStatusText(results.length ? results.length + " merged titles across servers" : "No results across enabled sources");
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "Search failed. Please try again.");
       setItems([]);
@@ -215,56 +213,85 @@ export default function App() {
     }
   }
 
-  async function watchNow(seasonOverride?: number, episodeOverride?: number) {
-    if (!details || loadingPlayback || phase !== "ready") return;
+  async function launchPlayback(
+    targetDetails: MediaDetails,
+    seasonOverride?: number,
+    episodeOverride?: number,
+    useSelectedSubtitle = true
+  ) {
+    if (phase !== "ready") return;
     setLoadingPlayback(true);
     setPlaybackError("");
-    const firstEpisode = details.seasons.flatMap((season) => season.episodes)[0];
-    const season = details.media_type === "series"
-      ? Math.max(1, seasonOverride ?? firstEpisode?.season ?? details.seasons[0]?.number ?? 1)
+    const firstEpisode = targetDetails.seasons.flatMap((season) => season.episodes)[0];
+    const season = targetDetails.media_type === "series"
+      ? Math.max(1, seasonOverride ?? firstEpisode?.season ?? targetDetails.seasons[0]?.number ?? 1)
       : 0;
-    const episode = details.media_type === "series"
+    const episode = targetDetails.media_type === "series"
       ? Math.max(1, episodeOverride ?? firstEpisode?.number ?? 1)
       : 0;
-    setSelectedEpisode(details.media_type === "series" ? { season, episode } : null);
+    setSelectedEpisode(targetDetails.media_type === "series" ? { season, episode } : null);
 
     try {
-      const candidates = playback && playback.season === season && playback.episode === episode
-        ? playback
-        : await apiRequest<MobilePlaybackResponse>("/api/v1/playback/sources", {
+      const candidates = await apiRequest<MobilePlaybackResponse>("/api/v1/playback/sources", {
         method: "POST",
         body: JSON.stringify({
-          provider: details.id.provider,
-          media_id: details.id.value,
+          provider: targetDetails.id.provider,
+          media_id: targetDetails.id.value,
           season,
           episode
         })
       });
       setPlayback(candidates);
       if (!candidates.releases.length) {
-        throw new Error("This title has no playable sources right now.");
+        throw new Error("No playable releases were returned by the enabled providers.");
       }
 
-      const subtitleIndex = selectedSubtitleIndex === "" ? undefined : Number(selectedSubtitleIndex);
+      const subtitleIndex = useSelectedSubtitle && selectedSubtitleIndex !== ""
+        ? Number(selectedSubtitleIndex)
+        : undefined;
+      // Prioritise one candidate per provider first, then one per individual source
+      // (including alternate audio IDs), then quality/mirror alternatives.
+      const orderedIndexes: number[] = [];
+      const usedIndexes = new Set<number>();
+      const firstByProvider = new Map<string, number>();
+      const firstBySource = new Map<string, number>();
+      (candidates.release_sources ?? []).forEach((sourceRef, index) => {
+        if (!firstByProvider.has(sourceRef.provider)) firstByProvider.set(sourceRef.provider, index);
+        const key = sourceRef.provider + ":" + sourceRef.media_id;
+        if (!firstBySource.has(key)) firstBySource.set(key, index);
+      });
+      for (const index of [...firstByProvider.values(), ...firstBySource.values()]) {
+        if (!usedIndexes.has(index)) { orderedIndexes.push(index); usedIndexes.add(index); }
+      }
+      candidates.releases.forEach((_release, index) => {
+        if (!usedIndexes.has(index)) { orderedIndexes.push(index); usedIndexes.add(index); }
+      });
+
       const failures: string[] = [];
       const resolvedSources: NativeStreamSource[] = [];
-      for (let index = 0; index < candidates.releases.length; index += 1) {
+      const maxResolvedSources = 12;
+      for (const index of orderedIndexes) {
+        if (resolvedSources.length >= maxResolvedSources) break;
+        const sourceRef = candidates.release_sources?.[index];
         try {
           const source = await apiRequest<ResolvedPlaybackSource>("/api/v1/playback/resolve", {
             method: "POST",
             body: JSON.stringify({
-              provider: candidates.provider,
-              media_id: candidates.media_id,
+              provider: sourceRef?.provider ?? candidates.provider,
+              media_id: sourceRef?.media_id ?? candidates.media_id,
               season: candidates.season,
               episode: candidates.episode,
-              release_index: index,
+              release_index: sourceRef?.release_index ?? index,
               ...(subtitleIndex === undefined ? {} : { subtitle_index: subtitleIndex })
             })
           });
           resolvedSources.push({
             url: source.url,
             headers: Object.fromEntries(source.headers),
-            label: source.source_label || candidates.releases[index]?.filename || "Stream source",
+            label: [
+              source.provider,
+              source.source_label || candidates.releases[index]?.filename || "Stream source"
+            ].filter(Boolean).join(" · "),
             ...(source.subtitle ? { subtitleUrl: source.subtitle } : {})
           });
         } catch (reason) {
@@ -276,17 +303,54 @@ export default function App() {
         throw new Error(failures[0] || "No source could be resolved. Try another title or provider.");
       }
 
+      // Remove the details sheet only when a real player launch is about to happen.
+      setDetails(null);
       await playInNativePlayer({
         url: resolvedSources[0].url,
-        title: details.title,
+        title: targetDetails.title,
         headers: resolvedSources[0].headers,
         ...(resolvedSources[0].subtitleUrl ? { subtitleUrl: resolvedSources[0].subtitleUrl } : {}),
         sources: resolvedSources
       });
     } catch (reason) {
+      setDetails(targetDetails);
       setPlaybackError(reason instanceof Error ? reason.message : "Could not start playback.");
     } finally {
       setLoadingPlayback(false);
+    }
+  }
+
+  async function watchNow(seasonOverride?: number, episodeOverride?: number) {
+    if (!details || loadingPlayback || phase !== "ready") return;
+    await launchPlayback(details, seasonOverride, episodeOverride, true);
+  }
+
+  async function startCatalogItem(item: CatalogItem) {
+    if (phase !== "ready" || loadingPlayback || openingItemKey) return;
+    setOpeningItemKey(itemKey(item));
+    setDetails(null);
+    setPlayback(null);
+    setPlaybackError("");
+    setError("");
+    try {
+      const target = await apiRequest<MediaDetails>("/api/v1/details", {
+        method: "POST",
+        body: JSON.stringify({ provider: item.id.provider, media_id: item.id.value })
+      });
+      // Like 7xAnime, tapping the poster opens playback directly. A series starts
+      // with its first available episode (or S1E1 when metadata is incomplete).
+      const firstEpisode = target.seasons.flatMap((season) => season.episodes)[0];
+      const season = target.media_type === "series"
+        ? Math.max(1, firstEpisode?.season ?? target.seasons[0]?.number ?? 1)
+        : 0;
+      const episode = target.media_type === "series"
+        ? Math.max(1, firstEpisode?.number ?? 1)
+        : 0;
+      await launchPlayback(target, season, episode, false);
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "Could not start this title.");
+    } finally {
+      setOpeningItemKey(null);
     }
   }
 
@@ -299,11 +363,11 @@ export default function App() {
       const source = await apiRequest<ResolvedPlaybackSource>("/api/v1/playback/resolve", {
         method: "POST",
         body: JSON.stringify({
-          provider: playback.provider,
-          media_id: playback.media_id,
+          provider: playback.release_sources?.[releaseIndex]?.provider ?? playback.provider,
+          media_id: playback.release_sources?.[releaseIndex]?.media_id ?? playback.media_id,
           season: playback.season,
           episode: playback.episode,
-          release_index: releaseIndex,
+          release_index: playback.release_sources?.[releaseIndex]?.release_index ?? releaseIndex,
           ...(subtitleIndex === undefined ? {} : { subtitle_index: subtitleIndex })
         })
       });
@@ -330,7 +394,7 @@ export default function App() {
     const saved = isFavorite(item);
     return (
       <article className="media-card" key={itemKey(item)}>
-        <button className="poster-button" type="button" onClick={() => void openDetails(item)} aria-label={"Open details for " + item.title}>
+        <button className="poster-button" type="button" onClick={() => void startCatalogItem(item)} disabled={openingItemKey !== null || loadingPlayback} aria-label={"Play " + item.title}>
           <div className="poster-art">
             {item.poster_url
               ? <img src={item.poster_url} loading="lazy" alt="" onError={(event) => { event.currentTarget.style.display = "none"; }} />
@@ -339,13 +403,14 @@ export default function App() {
             <div className="poster-shade" />
             <span className="poster-type">{item.media_type === "series" ? "SERIES" : "MOVIE"}</span>
             {item.year && <span className="poster-year">{item.year}</span>}
-            <span className="poster-play" aria-hidden="true">▶</span>
+            <span className="poster-play" aria-hidden="true">{openingItemKey === itemKey(item) ? "…" : "▶"}</span>
             <div className="poster-caption">
               <strong>{item.title}</strong>
-              <span>{item.season_count ? item.season_count + " seasons" : item.year || "Discover"}</span>
+              <span>{item.languages?.length ? item.languages.join(" · ") : item.provider_count && item.provider_count > 1 ? item.provider_count + " servers" : item.season_count ? item.season_count + " seasons" : item.year || "Discover"}</span>
             </div>
           </div>
         </button>
+        <button type="button" className="poster-info-button" aria-label={"Details for " + item.title} onClick={() => void openDetails(item)}>ⓘ</button>
         <button
           type="button"
           className={"favorite-toggle" + (saved ? " is-saved" : "")}
@@ -403,7 +468,7 @@ export default function App() {
                   <h2>{featured.title}</h2>
                   <p>Picked from your connected catalogue. Open the title to see details and available playback options.</p>
                   <div className="featured-actions">
-                    <button className="primary-button" type="button" onClick={() => void openDetails(featured)}><span>▶</span> Watch now</button>
+                    <button className="primary-button" type="button" onClick={() => void startCatalogItem(featured)}><span>▶</span> Watch now</button>
                     <button className={"secondary-button" + (isSavedFeatured ? " is-saved" : "")} type="button" onClick={() => toggleFavorite(featured)}>{isSavedFeatured ? "♥ Added to My List" : "♡ Add to My List"}</button>
                   </div>
                 </div>
@@ -464,11 +529,11 @@ export default function App() {
             <section className="search-panel" aria-label="Search titles">
               <form className="search-form" onSubmit={submitSearch}>
                 <label className="search-input-wrap"><span className="search-symbol">⌕</span><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search movies, series or anime…" aria-label="Search titles" autoComplete="off" /></label>
-                <label className="provider-select-wrap"><span className="provider-label">SOURCE</span><select value={providerId} onChange={(event) => setProviderId(event.target.value)} aria-label="Search source" disabled={phase !== "ready" || providers.length === 0}>{providers.map((provider) => <option key={provider.id} value={provider.id} disabled={!provider.available}>{provider.name}{provider.available ? "" : " · unavailable"}</option>)}</select></label>
+                <label className="provider-select-wrap"><span className="provider-label">SEARCH</span><select value={providerId} onChange={(event) => setProviderId(event.target.value)} aria-label="Search source" disabled={phase !== "ready" || providers.length === 0}><option value="all">All servers · merged</option>{providers.map((provider) => <option key={provider.id} value={provider.id} disabled={!provider.available}>{provider.name}{provider.available ? "" : " · unavailable"}</option>)}</select></label>
                 <button className="search-button" type="submit" disabled={phase !== "ready" || searching || !query.trim()}>{searching ? <span className="spinner" /> : "Search"}{!searching && <span aria-hidden="true"> ↗</span>}</button>
               </form>
               {phase === "connecting" && <div className="inline-note"><span className="spinner" /> Starting your on-device source engine…</div>}
-              {phase === "ready" && <div className="source-row"><span className="source-check">✓</span><span>{availableProviders.length} sources available</span><span className="source-separator">•</span><span>Local-first browsing</span></div>}
+              {phase === "ready" && <div className="source-row"><span className="source-check">✓</span><span>{availableProviders.length} sources searched in parallel</span><span className="source-separator">•</span><span>Local-first browsing</span></div>}
             </section>
             {error && phase === "ready" && <div className="error-inline">{error}</div>}
             <div className="results-heading">
@@ -477,7 +542,7 @@ export default function App() {
             </div>
             {visibleItems.length > 0
               ? <div className="title-grid">{visibleItems.map(renderCard)}</div>
-              : <div className="empty-state"><div className="empty-icon">✳</div><h3>{items.length ? "Nothing in this category" : searching ? "Searching…" : "A world of stories, one search away"}</h3><p>{items.length ? "Try another filter to see more results." : "Enter a title above to search the selected source directly from your device."}</p>{!searching && !items.length && <button className="secondary-button" type="button" onClick={() => setScreen("home")}>Back to Home</button>}</div>}
+              : <div className="empty-state"><div className="empty-icon">✳</div><h3>{items.length ? "Nothing in this category" : searching ? "Searching…" : "A world of stories, one search away"}</h3><p>{items.length ? "Try another filter to see more results." : "Enter a title above to search all enabled servers and merge matching titles."}</p>{!searching && !items.length && <button className="secondary-button" type="button" onClick={() => setScreen("home")}>Back to Home</button>}</div>}
           </section>
         )}
 
@@ -503,7 +568,7 @@ export default function App() {
             </div>
             <section className="settings-group">
               <div className="settings-group-title"><span className="settings-icon">◈</span><div><h2>Preferred source</h2><p>Used when you open Explore.</p></div></div>
-              <label className="settings-select"><span>SEARCH PROVIDER</span><select value={providerId} onChange={(event) => setProviderId(event.target.value)} disabled={phase !== "ready"}>{providers.map((provider) => <option key={provider.id} value={provider.id} disabled={!provider.available}>{provider.name}{provider.available ? "" : " · unavailable"}</option>)}</select></label>
+              <label className="settings-select"><span>SEARCH PROVIDER</span><select value={providerId} onChange={(event) => setProviderId(event.target.value)} disabled={phase !== "ready"}><option value="all">All servers · merged</option>{providers.map((provider) => <option key={provider.id} value={provider.id} disabled={!provider.available}>{provider.name}{provider.available ? "" : " · unavailable"}</option>)}</select></label>
               <div className="provider-list">{providers.map((provider) => <div className="provider-row" key={provider.id}><span className={"provider-status" + (provider.available ? " online" : "")} /><span className="provider-name">{provider.name}</span><span className="provider-state">{provider.available ? "Available" : "Unavailable"}</span></div>)}</div>
             </section>
             <section className="settings-group">
@@ -565,14 +630,14 @@ export default function App() {
             <div className="playback-results-heading"><strong>STREAM SOURCES</strong><span>{playback.releases.length} found</span></div>
             {playback.subtitles.length > 0 && <label className="subtitle-picker"><span>SUBTITLES</span><select value={selectedSubtitleIndex} onChange={(event) => setSelectedSubtitleIndex(event.target.value)}><option value="">Off</option>{playback.subtitles.map((subtitle, index) => <option key={subtitle.url + index} value={String(index)}>{subtitle.name}</option>)}</select></label>}
             {playback.releases.map((release, index) => <article className="playback-release" key={release.provider + ":" + release.filename + ":" + index}>
-              <div className="release-main"><strong>{release.filename || "Stream source"}</strong><span>{release.quality || "Quality not listed"}{release.language ? " · " + release.language : ""}{release.size_bytes ? " · " + (release.size_bytes / 1073741824).toFixed(2) + " GB" : ""}</span></div>
+              <div className="release-main"><strong>{release.filename || "Stream source"}</strong><span>{providers.find((provider) => provider.id === release.provider)?.name || release.provider}{release.quality ? " · " + release.quality : ""}{release.language ? " · " + release.language : ""}{release.size_bytes ? " · " + (release.size_bytes / 1073741824).toFixed(2) + " GB" : ""}</span></div>
               <div className="release-mirrors">{release.mirrors.length} mirror{release.mirrors.length === 1 ? "" : "s"}{release.mirrors[0] ? " · " + release.mirrors.map((mirror) => mirror.label).filter(Boolean).join(" / ") : ""}</div>
               {release.mirrors.some((mirror) => mirror.headers.length > 0) && <span className="release-header-note">Request headers included</span>}
               <button className="release-play-button" type="button" disabled={playingReleaseIndex !== null} onClick={() => void playRelease(index)}>{playingReleaseIndex === index ? <><span className="spinner" /> Opening player…</> : "▶ Play in app"}</button>
             </article>)}
             <p className="playback-next-step">Choose a source to open the native player. Some provider links may still fail due to upstream restrictions.</p>
           </section>}
-          <p className="provider-note">Details from {details.id.provider}. Sources are requested from the selected provider.</p>
+          <p className="provider-note">{playback?.provider_sources?.length ? "Merged playback options from " + [...new Set(playback.provider_sources.map((source) => providers.find((provider) => provider.id === source.provider)?.name || source.provider))].join(", ") : "Details from " + (providers.find((provider) => provider.id === details.id.provider)?.name || details.id.provider) + ". Playback checks all enabled providers."}</p>
         </div>
       </section></div>}
     </div>

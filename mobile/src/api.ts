@@ -2,13 +2,18 @@ import { Capacitor, registerPlugin } from "@capacitor/core";
 
 export interface BackendConnection { baseUrl: string; token: string; }
 export interface ProviderOption { id: string; name: string; available: boolean; capabilities: Record<string, unknown>; }
+export interface ProviderMediaId { provider: string; value: string; }
 export interface CatalogItem {
-  id: { provider: string; value: string };
+  id: ProviderMediaId;
   title: string;
   media_type: "movie" | "series";
   year?: string | null;
   poster_url?: string | null;
   season_count?: number | null;
+  /** Same title found on other providers/audio cuts. */
+  sources?: ProviderMediaId[];
+  languages?: string[];
+  provider_count?: number;
 }
 export interface MobileHomepage {
   items: CatalogItem[];
@@ -40,6 +45,8 @@ export interface MobilePlaybackResponse {
   episode: number;
   releases: PlaybackRelease[];
   subtitles: SubtitleOption[];
+  provider_sources?: ProviderMediaId[];
+  release_sources?: Array<{ provider: string; media_id: string; release_index: number }>;
 }
 export interface ResolvedPlaybackSource {
   provider: string;
