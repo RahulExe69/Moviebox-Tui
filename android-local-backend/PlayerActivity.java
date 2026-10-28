@@ -288,7 +288,11 @@ public final class PlayerActivity extends Activity {
 
     @Override
     public void onBackPressed() {
-        if (!isInPictureInPictureMode() && enterMiniPlayerMode()) return;
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O
+                && !isInPictureInPictureMode()
+                && enterMiniPlayerMode()) {
+            return;
+        }
         super.onBackPressed();
     }
 
