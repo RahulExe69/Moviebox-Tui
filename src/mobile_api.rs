@@ -535,7 +535,7 @@ impl MobileApi {
             if alternate_provider == requested_provider {
                 continue;
             }
-            let mut matching_item = None;
+            let mut matching_items: Vec<CatalogItem> = Vec::new();
             for query in &queries {
                 let results = match self
                     .service
@@ -553,21 +553,29 @@ impl MobileApi {
                         continue;
                     }
                 };
-                matching_item = results.into_iter().find(|item| {
+
+                for item in results {
                     let left = normalize_catalog_title(&item.title);
                     let right = normalize_catalog_title(&title);
-                    !left.is_empty()
+                    let matches_title = !left.is_empty()
                         && (left == right
                             || (left.len() >= 5
                                 && right.len() >= 5
-                                && (left.starts_with(&right) || right.starts_with(&left))))
-                });
-                if matching_item.is_some() {
-                    break;
+                                && (left.starts_with(&right) || right.starts_with(&left))));
+                    if matches_title
+                        && !matching_items
+                            .iter()
+                            .any(|existing| existing.id.value == item.id.value)
+                    {
+                        matching_items.push(item);
+                    }
                 }
             }
 
-            if let Some(item) = matching_item {
+            // Some providers index each dubbed audio cut as a separate result.
+            // Keep a small cap to avoid a noisy provider delaying first playback;
+            // the first entries are normally the canonical/best-ranked cuts.
+            for item in matching_items.into_iter().take(4) {
                 match self
                     .service
                     .releases_typed(alternate_provider, &item.id.value, season, episode)
@@ -592,7 +600,11 @@ impl MobileApi {
                     }
                     Ok(_) => {}
                     Err(error) => {
-                        log::debug!("{} had no usable releases: {}", alternate_provider, error);
+                        log::debug!(
+                            "{} returned no usable releases for one matching title: {}",
+                            alternate_provider,
+                            error
+                        );
                     }
                 }
             }
