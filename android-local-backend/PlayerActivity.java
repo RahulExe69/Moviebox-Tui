@@ -10,6 +10,10 @@ import android.util.Rational;
 import android.view.View;
 import android.view.MotionEvent;
 import android.view.WindowManager;
+import android.graphics.Color;
+import android.graphics.PixelFormat;
+import android.widget.TextView;
+import android.view.Gravity;
 import android.widget.FrameLayout;
 import android.widget.Toast;
 
@@ -37,6 +41,8 @@ import java.util.Map;
 public final class PlayerActivity extends Activity {
     private ExoPlayer player;
     private PlayerView playerView;
+    private TextView playbackStatus;
+    private FrameLayout playerRoot;
     private DefaultHttpDataSource.Factory httpFactory;
     private final List<JSONObject> candidates = new ArrayList<>();
     private String title = "7xCinema";
@@ -46,8 +52,14 @@ public final class PlayerActivity extends Activity {
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
-        enterImmersiveMode();
+        // Some generated Capacitor themes can leave a new Activity window translucent.
+        // Force an opaque black player window so the WebView can never show through it.
+        getWindow().setBackgroundDrawableResource(android.R.color.black);
+        getWindow().setFormat(PixelFormat.OPAQUE);
+        getWindow().clearFlags(WindowManager.LayoutParams.FLAG_TRANSLUCENT_STATUS
+                | WindowManager.LayoutParams.FLAG_TRANSLUCENT_NAVIGATION);
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+        enterImmersiveMode();
 
         title = getIntent().getStringExtra("media_title");
         if (title == null || title.trim().isEmpty()) title = "7xCinema";
@@ -63,14 +75,32 @@ public final class PlayerActivity extends Activity {
             return;
         }
 
+        playerRoot = new FrameLayout(this);
+        playerRoot.setBackgroundColor(Color.BLACK);
         playerView = new PlayerView(this);
         playerView.setUseController(true);
         playerView.setControllerShowTimeoutMs(4500);
         playerView.setKeepContentOnPlayerReset(true);
+        playerView.setShutterBackgroundColor(Color.BLACK);
+        playerView.setBackgroundColor(Color.BLACK);
         playerView.setLayoutParams(new FrameLayout.LayoutParams(
                 FrameLayout.LayoutParams.MATCH_PARENT,
                 FrameLayout.LayoutParams.MATCH_PARENT));
-        setContentView(playerView);
+        playerRoot.addView(playerView);
+
+        playbackStatus = new TextView(this);
+        playbackStatus.setTextColor(Color.WHITE);
+        playbackStatus.setTextSize(16);
+        playbackStatus.setGravity(Gravity.CENTER);
+        playbackStatus.setText("Connecting to stream…");
+        playbackStatus.setBackgroundColor(Color.BLACK);
+        playbackStatus.setPadding(32, 32, 32, 32);
+        FrameLayout.LayoutParams statusParams = new FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT,
+                FrameLayout.LayoutParams.MATCH_PARENT());
+        playbackStatus.setLayoutParams(statusParams);
+        playerRoot.addView(playbackStatus);
+        setContentView(playerRoot);
 
         try {
             httpFactory = new DefaultHttpDataSource.Factory()
@@ -84,6 +114,17 @@ public final class PlayerActivity extends Activity {
                     .build();
             playerView.setPlayer(player);
             player.addListener(new Player.Listener() {
+                @Override
+                public void onPlaybackStateChanged(int playbackState) {
+                    if (playbackStatus == null) return;
+                    if (playbackState == Player.STATE_READY) {
+                        playbackStatus.setVisibility(View.GONE);
+                    } else if (playbackState == Player.STATE_BUFFERING) {
+                        playbackStatus.setText("Connecting to stream…");
+                        playbackStatus.setVisibility(View.VISIBLE);
+                    }
+                }
+
                 @Override
                 public void onPlayerError(PlaybackException error) {
                     if (!switchingSource) tryNextSource();
@@ -177,6 +218,10 @@ public final class PlayerActivity extends Activity {
             Toast.makeText(this, "Trying another source: " + label, Toast.LENGTH_SHORT).show();
             playSource(next);
         } else {
+            if (playbackStatus != null) {
+                playbackStatus.setText("This stream could not be played.\n\nTry another title or source.");
+                playbackStatus.setVisibility(View.VISIBLE);
+            }
             Toast.makeText(this, "All available sources failed. Try another provider or title.", Toast.LENGTH_LONG).show();
         }
     }
