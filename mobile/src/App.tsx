@@ -47,6 +47,7 @@ export default function App() {
   const [playingReleaseIndex, setPlayingReleaseIndex] = useState<number | null>(null);
   const [selectedSubtitleIndex, setSelectedSubtitleIndex] = useState("");
   const [playbackError, setPlaybackError] = useState("");
+  const [selectedEpisode, setSelectedEpisode] = useState<{ season: number; episode: number } | null>(null);
   const [statusText, setStatusText] = useState("Starting on-device engine");
   const [error, setError] = useState("");
   const [bootAttempt, setBootAttempt] = useState(0);
@@ -170,6 +171,7 @@ export default function App() {
   async function openDetails(item: CatalogItem) {
     setError("");
     setPlayback(null);
+    setSelectedEpisode(null);
     setPlaybackError("");
     try {
       const result = await apiRequest<MediaDetails>("/api/v1/details", {
@@ -213,20 +215,23 @@ export default function App() {
     }
   }
 
-  async function watchNow() {
+  async function watchNow(seasonOverride?: number, episodeOverride?: number) {
     if (!details || loadingPlayback || phase !== "ready") return;
     setLoadingPlayback(true);
     setPlaybackError("");
     const firstEpisode = details.seasons.flatMap((season) => season.episodes)[0];
     const season = details.media_type === "series"
-      ? Math.max(1, firstEpisode?.season ?? details.seasons[0]?.number ?? 1)
+      ? Math.max(1, seasonOverride ?? firstEpisode?.season ?? details.seasons[0]?.number ?? 1)
       : 0;
     const episode = details.media_type === "series"
-      ? Math.max(1, firstEpisode?.number ?? 1)
+      ? Math.max(1, episodeOverride ?? firstEpisode?.number ?? 1)
       : 0;
+    setSelectedEpisode(details.media_type === "series" ? { season, episode } : null);
 
     try {
-      const candidates = playback ?? await apiRequest<MobilePlaybackResponse>("/api/v1/playback/sources", {
+      const candidates = playback && playback.season === season && playback.episode === episode
+        ? playback
+        : await apiRequest<MobilePlaybackResponse>("/api/v1/playback/sources", {
         method: "POST",
         body: JSON.stringify({
           provider: details.id.provider,
@@ -359,8 +364,8 @@ export default function App() {
     <div className="app-shell">
       <header className="topbar">
         <button className="brand" type="button" onClick={() => setScreen("home")} aria-label="7xCinema home">
-          <span className="brand-mark"><img src="/brand/7xcinema-mark.svg" alt="" /></span>
-          <span className="brand-name">7xCinema</span>
+          <span className="brand-mark"><img src="/brand/7xcinema-icon.png" alt="" /></span>
+          <span className="brand-name"><img src="/brand/7xcinema-wordmark.png" alt="7xCinema" /></span>
         </button>
         <nav className="desktop-nav" aria-label="Primary navigation">
           {(["home", "explore", "list", "settings"] as Screen[]).map((destination) => (
@@ -532,7 +537,21 @@ export default function App() {
           {details.tagline && <p className="tagline">{details.tagline}</p>}<p className="description">{details.description || "No description was provided by this source."}</p>
           {details.genres.length > 0 && <div className="genre-list">{details.genres.map((genre) => <span key={genre}>{genre}</span>)}</div>}
           {details.director && <p className="credit"><b>Director</b> {details.director}</p>}{details.stars && <p className="credit"><b>Cast</b> {details.stars}</p>}
-          {details.seasons.length > 0 && <p className="credit"><b>Seasons</b> {details.seasons.length} available</p>}{details.dubs.length > 0 && <p className="credit"><b>Audio options</b> {details.dubs.map((dub) => dub.label).join(", ")}</p>}
+          {details.seasons.length > 0 && <section className="episode-picker" aria-label="Episodes">
+            <div className="episode-picker-heading"><div><span className="section-kicker">EPISODES</span><h3>Choose an episode</h3></div><span>{details.seasons.reduce((total, season) => total + season.episodes.length, 0)} available</span></div>
+            {details.seasons.map((season) => <div className="season-group" key={season.number}>
+              <h4>Season {season.number}</h4>
+              <div className="episode-list">{season.episodes.map((episode) => {
+                const active = selectedEpisode?.season === season.number && selectedEpisode?.episode === episode.number;
+                return <button className={"episode-card" + (active ? " active" : "")} type="button" key={season.number + ":" + episode.number} disabled={loadingPlayback} onClick={() => void watchNow(season.number, episode.number)}>
+                  <span className="episode-number">{String(episode.number).padStart(2, "0")}</span>
+                  <span className="episode-copy"><strong>{episode.title || "Episode " + episode.number}</strong>{episode.overview && <small>{episode.overview}</small>}</span>
+                  <span className="episode-play">{active && loadingPlayback ? "…" : "▶"}</span>
+                </button>;
+              })}</div>
+            </div>)}
+          </section>}
+          {details.dubs.length > 0 && <p className="credit"><b>Audio options</b> {details.dubs.map((dub) => dub.label).join(", ")}</p>}
           <div className="playback-actions">
             <button className="primary-button watch-now-button" type="button" onClick={() => void watchNow()} disabled={loadingPlayback || phase !== "ready"}>
               {loadingPlayback ? <><span className="spinner" /> Finding a playable source…</> : <><span>▶</span> Watch now</>}
