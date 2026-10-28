@@ -175,11 +175,57 @@ impl MobileApi {
         }
 
         let provider = Self::parse_provider(provider)?;
-        let releases = self
-            .service
-            .releases_typed(provider, media_id, season, episode)
-            .await
-            .map_err(|error| MobileApiError::PlaybackProvider { provider, error })?;
+        // MovieBox often exposes each audio/language cut as a sibling subject ID.
+        // The selected listing can lack a direct file while another cut of the
+        // same title has one, so try the selected ID first, then its siblings.
+        let (resolved_media_id, releases) = if provider == ProviderKind::MovieBox {
+            let mut candidate_ids = vec![media_id.to_string()];
+            if let Ok(details) = self.service.details_typed(provider, media_id).await {
+                for sibling_id in details.sibling_ids() {
+                    if !sibling_id.trim().is_empty() && !candidate_ids.contains(&sibling_id) {
+                        candidate_ids.push(sibling_id);
+                    }
+                }
+            }
+
+            let mut last_error =
+                ProviderError::Unavailable("No stream sources available".to_string());
+            let mut found = None;
+            for candidate_id in candidate_ids {
+                match self
+                    .service
+                    .releases_typed(provider, &candidate_id, season, episode)
+                    .await
+                {
+                    Ok(candidate_releases) if !candidate_releases.is_empty() => {
+                        found = Some((candidate_id, candidate_releases));
+                        break;
+                    }
+                    Ok(_) => {
+                        last_error =
+                            ProviderError::Unavailable("No stream sources available".to_string());
+                    }
+                    Err(error) => last_error = error,
+                }
+            }
+
+            match found {
+                Some(result) => result,
+                None => {
+                    return Err(MobileApiError::PlaybackProvider {
+                        provider,
+                        error: last_error,
+                    });
+                }
+            }
+        } else {
+            let releases = self
+                .service
+                .releases_typed(provider, media_id, season, episode)
+                .await
+                .map_err(|error| MobileApiError::PlaybackProvider { provider, error })?;
+            (media_id.to_string(), releases)
+        };
 
         // Caption lookup is best-effort: a subtitle service failure must not
         // prevent the user from seeing available video releases.
@@ -189,12 +235,12 @@ impl MobileApi {
                 .find_map(|release| release.resource_id.as_deref());
             if let Some(resource_id) = resource_id {
                 let sibling_ids = self
-                    .details(provider.cache_key(), media_id)
+                    .details(provider.cache_key(), &resolved_media_id)
                     .await
                     .map(|details| details.sibling_ids())
                     .unwrap_or_default();
                 self.service
-                    .get_ext_captions(media_id, resource_id, &sibling_ids, season, episode)
+                    .get_ext_captions(&resolved_media_id, resource_id, &sibling_ids, season, episode)
                     .await
                     .unwrap_or_default()
             } else {
@@ -206,7 +252,7 @@ impl MobileApi {
 
         Ok(MobilePlaybackResponse {
             provider,
-            media_id: media_id.to_string(),
+            media_id: resolved_media_id,
             season,
             episode,
             releases,

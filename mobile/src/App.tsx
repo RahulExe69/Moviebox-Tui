@@ -359,7 +359,7 @@ export default function App() {
     <div className="app-shell">
       <header className="topbar">
         <button className="brand" type="button" onClick={() => setScreen("home")} aria-label="7xCinema home">
-          <span className="brand-mark">7<span>x</span></span>
+          <span className="brand-mark"><img src="/brand/7xcinema-mark.svg" alt="" /></span>
           <span className="brand-name">7xCinema</span>
         </button>
         <nav className="desktop-nav" aria-label="Primary navigation">
