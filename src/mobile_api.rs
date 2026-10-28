@@ -45,10 +45,21 @@ pub struct MobilePlaybackResponse {
     pub episode: usize,
     pub releases: Vec<Release>,
     pub subtitles: Vec<SubtitleOption>,
+    /// Parallel to releases: source provider, media ID, and provider-local release index.
+    pub release_sources: Vec<MobileReleaseSource>,
     /// Unique provider/media IDs which contributed playable releases.
     pub provider_sources: Vec<crate::providers::models::ProviderMediaId>,
 }
 
+
+/// Maps one merged playback row back to the provider-specific release index.
+/// Resolution can then query just that provider instead of repeating every search.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MobileReleaseSource {
+    pub provider: ProviderKind,
+    pub media_id: String,
+    pub release_index: usize,
+}
 
 /// A merged catalogue entry. One visible title may be backed by several providers
 /// and audio cuts; sources retains the provider-specific IDs needed for playback.
@@ -192,10 +203,13 @@ fn media_title_from_id(media_id: &str) -> String {
 
 fn append_unique_releases(
     output: &mut Vec<Release>,
+    source_refs: &mut Vec<MobileReleaseSource>,
     seen: &mut std::collections::HashSet<String>,
+    provider: ProviderKind,
+    media_id: &str,
     candidates: Vec<Release>,
 ) {
-    for release in candidates {
+    for (release_index, release) in candidates.into_iter().enumerate() {
         let key = format!(
             "{}|{}|{}|{}|{}|{}",
             release.provider.cache_key(),
@@ -207,6 +221,11 @@ fn append_unique_releases(
         );
         if seen.insert(key) {
             output.push(release);
+            source_refs.push(MobileReleaseSource {
+                provider,
+                media_id: media_id.to_string(),
+                release_index,
+            });
         }
     }
 }
@@ -435,6 +454,7 @@ impl MobileApi {
 
         let mut provider_sources = Vec::new();
         let mut releases: Vec<Release> = Vec::new();
+        let mut release_sources: Vec<MobileReleaseSource> = Vec::new();
         let mut seen_release_keys = std::collections::HashSet::new();
 
         for source_id in source_ids.clone() {
@@ -449,7 +469,10 @@ impl MobileApi {
                     }
                     append_unique_releases(
                         &mut releases,
+                        &mut release_sources,
                         &mut seen_release_keys,
+                        source_id.provider,
+                        &source_id.value,
                         candidate_releases,
                     );
                 }
@@ -520,7 +543,10 @@ impl MobileApi {
                         }
                         append_unique_releases(
                             &mut releases,
+                            &mut release_sources,
                             &mut seen_release_keys,
+                            source_id.provider,
+                            &source_id.value,
                             candidate_releases,
                         );
                     }
@@ -579,6 +605,7 @@ impl MobileApi {
             episode,
             releases,
             subtitles,
+            release_sources,
             provider_sources,
         })
     }
@@ -594,23 +621,27 @@ impl MobileApi {
         release_index: usize,
         subtitle_index: Option<usize>,
     ) -> Result<PlaybackSource, MobileApiError> {
-        let candidates = self
-            .playback_sources(provider, media_id, season, episode)
-            .await?;
-        let release = candidates
-            .releases
+        let provider = Self::parse_provider(provider)?;
+        let releases = self
+            .service
+            .releases_typed(provider, media_id, season, episode)
+            .await
+            .map_err(|error| MobileApiError::PlaybackProvider { provider, error })?;
+        let release = releases
             .get(release_index)
             .ok_or(MobileApiError::InvalidReleaseIndex)?;
         let mut source = self
             .service
-            .resolve_release_typed(release.provider, release)
+            .resolve_release_typed(provider, release)
             .await
-            .map_err(|error| MobileApiError::PlaybackProvider {
-                provider: release.provider,
-                error,
-            })?;
+            .map_err(|error| MobileApiError::PlaybackProvider { provider, error })?;
 
         if let Some(index) = subtitle_index {
+            // Subtitles are optional; retrieve the same combined subtitle list
+            // only when the user explicitly selected a subtitle.
+            let candidates = self
+                .playback_sources(provider.cache_key(), media_id, season, episode)
+                .await?;
             let subtitle = candidates
                 .subtitles
                 .get(index)
