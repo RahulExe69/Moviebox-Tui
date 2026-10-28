@@ -97,7 +97,7 @@ public final class PlayerActivity extends Activity {
         playbackStatus.setPadding(32, 32, 32, 32);
         FrameLayout.LayoutParams statusParams = new FrameLayout.LayoutParams(
                 FrameLayout.LayoutParams.MATCH_PARENT,
-                FrameLayout.LayoutParams.MATCH_PARENT());
+                FrameLayout.LayoutParams.MATCH_PARENT);
         playbackStatus.setLayoutParams(statusParams);
         playerRoot.addView(playbackStatus);
         setContentView(playerRoot);
