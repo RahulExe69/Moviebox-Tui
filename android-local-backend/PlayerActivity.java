@@ -1,8 +1,12 @@
 package com.sevenx.cinema;
 
 import android.app.Activity;
+import android.app.PictureInPictureParams;
+import android.content.res.Configuration;
 import android.net.Uri;
+import android.os.Build;
 import android.os.Bundle;
+import android.util.Rational;
 import android.view.View;
 import android.view.WindowManager;
 import android.widget.FrameLayout;
@@ -31,6 +35,7 @@ import java.util.Map;
 
 public final class PlayerActivity extends Activity {
     private ExoPlayer player;
+    private PlayerView playerView;
     private DefaultHttpDataSource.Factory httpFactory;
     private final List<JSONObject> candidates = new ArrayList<>();
     private String title = "7xCinema";
@@ -57,7 +62,7 @@ public final class PlayerActivity extends Activity {
             return;
         }
 
-        PlayerView playerView = new PlayerView(this);
+        playerView = new PlayerView(this);
         playerView.setUseController(true);
         playerView.setControllerShowTimeoutMs(4500);
         playerView.setKeepContentOnPlayerReset(true);
@@ -207,6 +212,54 @@ public final class PlayerActivity extends Activity {
         if (lower.endsWith(".srt")) return MimeTypes.APPLICATION_SUBRIP;
         if (lower.endsWith(".ttml") || lower.endsWith(".xml")) return MimeTypes.APPLICATION_TTML;
         return null;
+    }
+
+    /**
+     * Collapse playback into Android's draggable Picture-in-Picture window when
+     * the user presses Back or leaves the app. Playback stays alive while the
+     * underlying 7xCinema catalogue remains usable.
+     */
+    private boolean enterMiniPlayerMode() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O || player == null
+                || player.getPlaybackState() == Player.STATE_IDLE) {
+            return false;
+        }
+        try {
+            PictureInPictureParams params = new PictureInPictureParams.Builder()
+                    .setAspectRatio(new Rational(16, 9))
+                    .build();
+            return enterPictureInPictureMode(params);
+        } catch (RuntimeException ignored) {
+            return false;
+        }
+    }
+
+    @Override
+    public void onBackPressed() {
+        if (!isInPictureInPictureMode() && enterMiniPlayerMode()) return;
+        super.onBackPressed();
+    }
+
+    @Override
+    protected void onUserLeaveHint() {
+        super.onUserLeaveHint();
+        enterMiniPlayerMode();
+    }
+
+    @Override
+    public void onPictureInPictureModeChanged(boolean inPictureInPictureMode, Configuration newConfig) {
+        super.onPictureInPictureModeChanged(inPictureInPictureMode, newConfig);
+        if (playerView != null) {
+            // Keep the compact window focused on the video; a tap expands it again.
+            playerView.setUseController(!inPictureInPictureMode);
+        }
+        if (inPictureInPictureMode) {
+            getWindow().clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+            getWindow().getDecorView().setSystemUiVisibility(View.SYSTEM_UI_FLAG_LAYOUT_STABLE);
+        } else {
+            getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+            enterImmersiveMode();
+        }
     }
 
     private void enterImmersiveMode() {

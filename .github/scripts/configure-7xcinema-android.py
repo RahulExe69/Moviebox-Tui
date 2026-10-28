@@ -66,7 +66,8 @@ if 'android:name=".PlayerActivity"' not in manifest:
         "</application>",
         '        <activity android:name=".PlayerActivity" '
         'android:exported="false" android:screenOrientation="sensorLandscape" '
-        'android:configChanges="orientation|screenSize|keyboardHidden" />\n    </application>',
+        'android:resizeableActivity="true" android:supportsPictureInPicture="true" '
+        'android:configChanges="orientation|screenSize|keyboardHidden|smallestScreenSize|screenLayout" />\n    </application>',
         1,
     )
 manifest_path.write_text(manifest, encoding="utf-8")
