@@ -8,6 +8,7 @@ import android.os.Build;
 import android.os.Bundle;
 import android.util.Rational;
 import android.view.View;
+import android.view.MotionEvent;
 import android.view.WindowManager;
 import android.widget.FrameLayout;
 import android.widget.Toast;
@@ -212,6 +213,57 @@ public final class PlayerActivity extends Activity {
         if (lower.endsWith(".srt")) return MimeTypes.APPLICATION_SUBRIP;
         if (lower.endsWith(".ttml") || lower.endsWith(".xml")) return MimeTypes.APPLICATION_TTML;
         return null;
+    }
+
+    private float miniSwipeStartX;
+    private float miniSwipeStartY;
+    private boolean miniSwipeCandidate;
+
+    /**
+     * A deliberate downward swipe collapses fullscreen playback into Android PiP.
+     * Horizontal seeking/gestures are left alone, and the system owns dragging
+     * and tap-to-expand once the player is in the mini window.
+     */
+    @Override
+    public boolean dispatchTouchEvent(MotionEvent event) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && !isInPictureInPictureMode()) {
+            float density = getResources().getDisplayMetrics().density;
+            float threshold = 100f * density;
+            switch (event.getActionMasked()) {
+                case MotionEvent.ACTION_DOWN:
+                    miniSwipeStartX = event.getX();
+                    miniSwipeStartY = event.getY();
+                    miniSwipeCandidate = true;
+                    break;
+                case MotionEvent.ACTION_MOVE:
+                    if (miniSwipeCandidate) {
+                        float dx = event.getX() - miniSwipeStartX;
+                        float dy = event.getY() - miniSwipeStartY;
+                        if (Math.abs(dx) > threshold || dy < -24f * density) {
+                            miniSwipeCandidate = false;
+                        }
+                    }
+                    break;
+                case MotionEvent.ACTION_UP:
+                    if (miniSwipeCandidate) {
+                        float dx = event.getX() - miniSwipeStartX;
+                        float dy = event.getY() - miniSwipeStartY;
+                        boolean downwardSwipe = dy >= threshold && Math.abs(dx) <= threshold;
+                        miniSwipeCandidate = false;
+                        if (downwardSwipe && enterMiniPlayerMode()) {
+                            return true;
+                        }
+                    }
+                    miniSwipeCandidate = false;
+                    break;
+                case MotionEvent.ACTION_CANCEL:
+                    miniSwipeCandidate = false;
+                    break;
+                default:
+                    break;
+            }
+        }
+        return super.dispatchTouchEvent(event);
     }
 
     /**
