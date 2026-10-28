@@ -253,7 +253,7 @@ async fn handle_request(
                 }
             };
             match api
-                .search(&payload.provider, &payload.query, payload.page.unwrap_or(1))
+                .search_catalog(&payload.provider, &payload.query, payload.page.unwrap_or(1))
                 .await
             {
                 Ok(items) => json_response(StatusCode::OK, &items, origin.as_deref()),

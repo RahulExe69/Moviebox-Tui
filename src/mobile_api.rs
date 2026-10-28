@@ -45,6 +45,24 @@ pub struct MobilePlaybackResponse {
     pub episode: usize,
     pub releases: Vec<Release>,
     pub subtitles: Vec<SubtitleOption>,
+    /// Unique provider/media IDs which contributed playable releases.
+    pub provider_sources: Vec<crate::providers::models::ProviderMediaId>,
+}
+
+
+/// A merged catalogue entry. One visible title may be backed by several providers
+/// and audio cuts; sources retains the provider-specific IDs needed for playback.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct MobileCatalogItem {
+    pub id: crate::providers::models::ProviderMediaId,
+    pub title: String,
+    pub media_type: crate::providers::models::MediaType,
+    pub year: Option<String>,
+    pub poster_url: Option<String>,
+    pub season_count: Option<usize>,
+    pub sources: Vec<crate::providers::models::ProviderMediaId>,
+    pub languages: Vec<String>,
+    pub provider_count: usize,
 }
 
 /// Errors at the mobile facade boundary. These are intentionally transport-neutral;
@@ -76,6 +94,121 @@ pub enum MobileApiError {
     Provider(#[from] ProviderError),
     #[error("{0}")]
     Service(String),
+}
+
+fn strip_trailing_title_tags(value: &str) -> String {
+    let mut cleaned = value.trim().to_string();
+    loop {
+        let Some(open) = cleaned.rfind('[') else { break };
+        if cleaned.ends_with(']') && open > 0 {
+            cleaned.truncate(open);
+            cleaned = cleaned.trim().to_string();
+        } else {
+            break;
+        }
+    }
+    cleaned
+}
+
+fn normalize_catalog_title(value: &str) -> String {
+    strip_trailing_title_tags(value)
+        .chars()
+        .filter(|character| character.is_alphanumeric())
+        .flat_map(char::to_lowercase)
+        .collect()
+}
+
+fn years_compatible(left: Option<&str>, right: Option<&str>) -> bool {
+    match (left, right) {
+        (Some(left), Some(right)) if !left.trim().is_empty() && !right.trim().is_empty() => {
+            left.trim() == right.trim()
+        }
+        _ => true,
+    }
+}
+
+fn title_languages(value: &str) -> Vec<String> {
+    let lower = value.to_ascii_lowercase();
+    let known = [
+        ("english", "English"), ("hindi", "Hindi"), ("bengali", "Bengali"),
+        ("bangla", "Bengali"), ("tamil", "Tamil"), ("telugu", "Telugu"),
+        ("kannada", "Kannada"), ("malayalam", "Malayalam"), ("punjabi", "Punjabi"),
+        ("urdu", "Urdu"), ("japanese", "Japanese"), ("korean", "Korean"),
+        ("chinese", "Chinese"), ("spanish", "Spanish"), ("french", "French"),
+        ("arabic", "Arabic"), ("portuguese", "Portuguese"), ("thai", "Thai"),
+    ];
+    let mut languages = Vec::new();
+    for (needle, label) in known {
+        if lower.contains(&format!("[{needle}]"))
+            && !languages.iter().any(|value: &String| value == label)
+        {
+            languages.push(label.to_string());
+        }
+    }
+    languages
+}
+
+fn provider_count(sources: &[crate::providers::models::ProviderMediaId]) -> usize {
+    let mut providers = Vec::new();
+    for source in sources {
+        if !providers.contains(&source.provider) {
+            providers.push(source.provider);
+        }
+    }
+    providers.len()
+}
+
+fn mobile_catalog_item(item: CatalogItem) -> MobileCatalogItem {
+    let languages = title_languages(&item.title);
+    let display_title = strip_trailing_title_tags(&item.title);
+    MobileCatalogItem {
+        id: item.id.clone(),
+        title: if display_title.is_empty() { item.title.clone() } else { display_title },
+        media_type: item.media_type,
+        year: item.year,
+        poster_url: item.poster_url,
+        season_count: item.season_count,
+        sources: vec![item.id],
+        languages,
+        provider_count: 1,
+    }
+}
+
+fn playback_search_queries(title: &str) -> Vec<String> {
+    let cleaned = strip_trailing_title_tags(title);
+    let mut queries = Vec::new();
+    if !cleaned.is_empty() {
+        queries.push(cleaned);
+    }
+    if !title.trim().is_empty() && !queries.iter().any(|query| query.eq_ignore_ascii_case(title.trim())) {
+        queries.push(title.trim().to_string());
+    }
+    queries
+}
+
+fn media_title_from_id(media_id: &str) -> String {
+    media_id.trim().to_string()
+}
+
+fn append_unique_releases(
+    output: &mut Vec<Release>,
+    seen: &mut std::collections::HashSet<String>,
+    candidates: Vec<Release>,
+) {
+    for release in candidates {
+        let key = format!(
+            "{}|{}|{}|{}|{}|{}",
+            release.provider.cache_key(),
+            release.filename,
+            release.quality.as_deref().unwrap_or_default(),
+            release.language.as_deref().unwrap_or_default(),
+            release.resource_id.as_deref().unwrap_or_default(),
+            release.mirrors.iter().map(|mirror| mirror.resolver_url.as_str()).collect::<Vec<_>>().join(",")
+        );
+        if seen.insert(key) {
+            output.push(release);
+        }
+    }
 }
 
 /// A small, transport-independent API for a mobile client.
@@ -141,6 +274,103 @@ impl MobileApi {
             .map_err(MobileApiError::from)
     }
 
+    /// Search a single provider or all enabled providers ("all"), merge duplicate
+    /// titles, and retain each provider-specific ID for later playback.
+    pub async fn search_catalog(
+        &self,
+        provider: &str,
+        query: &str,
+        page: usize,
+    ) -> Result<Vec<MobileCatalogItem>, MobileApiError> {
+        if provider.trim().eq_ignore_ascii_case("all") {
+            return self.search_all(query, page).await;
+        }
+        let items = self.search(provider, query, page).await?;
+        Ok(items.into_iter().map(mobile_catalog_item).collect())
+    }
+
+    pub async fn search_all(
+        &self,
+        query: &str,
+        page: usize,
+    ) -> Result<Vec<MobileCatalogItem>, MobileApiError> {
+        let query = query.trim();
+        if query.is_empty() {
+            return Err(MobileApiError::EmptyQuery);
+        }
+        let page = page.clamp(1, 1000);
+        let (moviebox, fourk, dramachi, circleftp, dhakaflix) = tokio::join!(
+            self.service.search_typed(ProviderKind::MovieBox, query, page),
+            self.service.search_typed(ProviderKind::FourKHdHub, query, page),
+            self.service.search_typed(ProviderKind::Dramachi, query, page),
+            self.service.search_typed(ProviderKind::BdixCircleFtp, query, page),
+            self.service.search_typed(ProviderKind::BdixDhakaFlix, query, page),
+        );
+
+        let provider_results = [
+            (ProviderKind::MovieBox, moviebox),
+            (ProviderKind::FourKHdHub, fourk),
+            (ProviderKind::Dramachi, dramachi),
+            (ProviderKind::BdixCircleFtp, circleftp),
+            (ProviderKind::BdixDhakaFlix, dhakaflix),
+        ];
+        let mut merged: Vec<MobileCatalogItem> = Vec::new();
+        let mut first_error = None;
+        for (provider, result) in provider_results {
+            match result {
+                Ok(items) => {
+                    for item in items {
+                        let candidate = mobile_catalog_item(item);
+                        let normalized = normalize_catalog_title(&candidate.title);
+                        let same_index = merged.iter().position(|existing| {
+                            normalize_catalog_title(&existing.title) == normalized
+                                && existing.media_type == candidate.media_type
+                                && years_compatible(existing.year.as_deref(), candidate.year.as_deref())
+                        });
+                        if let Some(index) = same_index {
+                            let existing = &mut merged[index];
+                            for source in candidate.sources {
+                                if !existing.sources.contains(&source) {
+                                    existing.sources.push(source);
+                                }
+                            }
+                            for language in candidate.languages {
+                                if !existing.languages.iter().any(|value| value.eq_ignore_ascii_case(&language)) {
+                                    existing.languages.push(language);
+                                }
+                            }
+                            if existing.poster_url.is_none() {
+                                existing.poster_url = candidate.poster_url;
+                            }
+                            if existing.year.is_none() {
+                                existing.year = candidate.year;
+                            }
+                            existing.provider_count = provider_count(&existing.sources);
+                        } else {
+                            merged.push(candidate);
+                        }
+                    }
+                }
+                Err(error) => {
+                    log::debug!("catalog search failed for {}: {}", provider, error);
+                    if first_error.is_none() {
+                        first_error = Some(error);
+                    }
+                }
+            }
+        }
+
+        if merged.is_empty() {
+            if let Some(error) = first_error {
+                return Err(MobileApiError::Provider(error));
+            }
+        }
+        for item in &mut merged {
+            item.provider_count = provider_count(&item.sources);
+        }
+        Ok(merged)
+    }
+
     pub async fn details(
         &self,
         provider: &str,
@@ -175,203 +405,181 @@ impl MobileApi {
         }
 
         let requested_provider = Self::parse_provider(provider)?;
-        // Try MovieBox's selected audio cut and all sibling cuts first. If none
-        // has releases, search other configured providers for the same title.
-        let mut movie_title: Option<String> = None;
-        let mut candidate_ids = vec![media_id.to_string()];
-        if requested_provider == ProviderKind::MovieBox {
-            if let Ok(details) = self
-                .service
-                .details_typed(requested_provider, media_id)
-                .await
-            {
-                movie_title = Some(details.title.clone());
-                for sibling_id in details.sibling_ids() {
-                    if !sibling_id.trim().is_empty() && !candidate_ids.contains(&sibling_id) {
-                        candidate_ids.push(sibling_id);
+        let mut title = media_title_from_id(media_id);
+        let mut source_ids: Vec<crate::providers::models::ProviderMediaId> = vec![
+            crate::providers::models::ProviderMediaId {
+                provider: requested_provider,
+                value: media_id.to_string(),
+            },
+        ];
+
+        // A title may have several MovieBox subject IDs (one per audio cut).
+        // Start with the exact selected ID and append sibling cuts before other servers.
+        if let Ok(details) = self.service.details_typed(requested_provider, media_id).await {
+            title = details.title.clone();
+            if requested_provider == ProviderKind::MovieBox {
+                for dub in details.dubs {
+                    if dub.subject_id.trim().is_empty() {
+                        continue;
+                    }
+                    let source = crate::providers::models::ProviderMediaId {
+                        provider: requested_provider,
+                        value: dub.subject_id,
+                    };
+                    if !source_ids.contains(&source) {
+                        source_ids.push(source);
                     }
                 }
             }
         }
 
-        let mut last_error = ProviderError::Unavailable("No stream sources available".to_string());
-        let mut found: Option<(ProviderKind, String, Vec<Release>)> = None;
+        let mut provider_sources = Vec::new();
+        let mut releases: Vec<Release> = Vec::new();
+        let mut seen_release_keys = std::collections::HashSet::new();
 
-        for candidate_id in candidate_ids {
+        for source_id in source_ids.clone() {
             match self
                 .service
-                .releases_typed(requested_provider, &candidate_id, season, episode)
+                .releases_typed(source_id.provider, &source_id.value, season, episode)
                 .await
             {
                 Ok(candidate_releases) if !candidate_releases.is_empty() => {
-                    found = Some((requested_provider, candidate_id, candidate_releases));
-                    break;
+                    if !provider_sources.contains(&source_id) {
+                        provider_sources.push(source_id.clone());
+                    }
+                    append_unique_releases(
+                        &mut releases,
+                        &mut seen_release_keys,
+                        candidate_releases,
+                    );
                 }
-                Ok(_) => {
-                    last_error =
-                        ProviderError::Unavailable("No stream sources available".to_string());
+                Ok(_) => {}
+                Err(error) => {
+                    log::debug!(
+                        "playback source lookup failed for {} / {}: {}",
+                        source_id.provider,
+                        source_id.value,
+                        error
+                    );
                 }
-                Err(error) => last_error = error,
             }
         }
 
-        if found.is_none() && requested_provider == ProviderKind::MovieBox {
-            if let Some(title) = movie_title.as_deref() {
-                // MovieBox titles often include UI-only audio/quality tags such as
-                // "Hope [Hindi]" or "Clayface [Hindi][CAM]". Searching for that
-                // literal string elsewhere prevents the cross-provider fallback
-                // from finding the same movie under its canonical title.
-                let strip_trailing_tags = |value: &str| -> String {
-                    let mut cleaned = value.trim().to_string();
-                    loop {
-                        let Some(open) = cleaned.rfind('[') else { break };
-                        if cleaned.ends_with(']') && open > 0 {
-                            cleaned.truncate(open);
-                            cleaned = cleaned.trim().to_string();
-                        } else {
-                            break;
-                        }
-                    }
-                    cleaned
-                };
-                let normalize_title = |value: &str| -> String {
-                    strip_trailing_tags(value)
-                        .chars()
-                        .filter(|ch| ch.is_alphanumeric())
-                        .flat_map(char::to_lowercase)
-                        .collect()
-                };
-                let wanted = normalize_title(title);
-                let mut queries = vec![strip_trailing_tags(title)];
-                if queries[0].is_empty() {
-                    queries[0] = title.trim().to_string();
-                }
-                // Also try the original provider title in case the tags are
-                // meaningful to a particular catalog's search implementation.
-                if !title.trim().is_empty() && !queries.iter().any(|q| q.eq_ignore_ascii_case(title.trim())) {
-                    queries.push(title.trim().to_string());
-                }
-
-                for alternate_provider in ProviderKind::ENABLED {
-                    if alternate_provider == ProviderKind::MovieBox {
+        // Search every other server even when the first server has a stream.
+        // This is what makes audio/quality options additive rather than fallback-only.
+        let queries = playback_search_queries(&title);
+        for alternate_provider in ProviderKind::ENABLED {
+            if alternate_provider == requested_provider {
+                continue;
+            }
+            let mut matching_item = None;
+            for query in &queries {
+                let results = match self
+                    .service
+                    .search_typed(alternate_provider, query, 1)
+                    .await
+                {
+                    Ok(results) => results,
+                    Err(error) => {
+                        log::debug!(
+                            "catalog fallback search failed for {} with query {:?}: {}",
+                            alternate_provider,
+                            query,
+                            error
+                        );
                         continue;
                     }
-                    let mut matched_item = None;
-                    for query in &queries {
-                        let search_results = match self
-                            .service
-                            .search_typed(alternate_provider, query, 1)
-                            .await
-                        {
-                            Ok(results) => results,
-                            Err(error) => {
-                                log::debug!(
-                                    "playback fallback search failed for {} with query {:?}: {}",
-                                    alternate_provider,
-                                    query,
-                                    error
-                                );
-                                continue;
-                            }
-                        };
-                        matched_item = search_results.into_iter().find(|item| {
-                            let candidate = normalize_title(&item.title);
-                            !wanted.is_empty()
-                                && (candidate == wanted
-                                    || (wanted.len() >= 5
-                                        && candidate.len() >= 5
-                                        && (candidate.starts_with(&wanted)
-                                            || wanted.starts_with(&candidate))))
-                        });
-                        if matched_item.is_some() {
-                            break;
-                        }
-                    }
+                };
+                matching_item = results.into_iter().find(|item| {
+                    let left = normalize_catalog_title(&item.title);
+                    let right = normalize_catalog_title(&title);
+                    !left.is_empty()
+                        && (left == right
+                            || (left.len() >= 5
+                                && right.len() >= 5
+                                && (left.starts_with(&right) || right.starts_with(&left))))
+                });
+                if matching_item.is_some() {
+                    break;
+                }
+            }
 
-                    if let Some(item) = matched_item {
-                        match self
-                            .service
-                            .releases_typed(alternate_provider, &item.id.value, season, episode)
-                            .await
-                        {
-                            Ok(candidate_releases) if !candidate_releases.is_empty() => {
-                                log::info!(
-                                    "playback fallback found sources for {:?} using {}",
-                                    title,
-                                    alternate_provider
-                                );
-                                found = Some((
-                                    alternate_provider,
-                                    item.id.value,
-                                    candidate_releases,
-                                ));
-                                break;
-                            }
-                            Ok(_) => {
-                                last_error = ProviderError::Unavailable(
-                                    format!("{} returned no stream sources", alternate_provider),
-                                );
-                            }
-                            Err(error) => {
-                                log::debug!(
-                                    "playback fallback releases failed for {}: {}",
-                                    alternate_provider,
-                                    error
-                                );
-                                last_error = error;
-                            }
+            if let Some(item) = matching_item {
+                match self
+                    .service
+                    .releases_typed(alternate_provider, &item.id.value, season, episode)
+                    .await
+                {
+                    Ok(candidate_releases) if !candidate_releases.is_empty() => {
+                        let source_id = crate::providers::models::ProviderMediaId {
+                            provider: alternate_provider,
+                            value: item.id.value,
+                        };
+                        if !provider_sources.contains(&source_id) {
+                            provider_sources.push(source_id);
                         }
+                        append_unique_releases(
+                            &mut releases,
+                            &mut seen_release_keys,
+                            candidate_releases,
+                        );
+                    }
+                    Ok(_) => {}
+                    Err(error) => {
+                        log::debug!("{} had no usable releases: {}", alternate_provider, error);
                     }
                 }
             }
         }
 
-        let (provider, resolved_media_id, releases) = match found {
-            Some(result) => result,
-            None => {
-                return Err(MobileApiError::PlaybackProvider {
-                    provider: requested_provider,
-                    error: last_error,
-                });
-            }
-        };
+        if releases.is_empty() {
+            return Err(MobileApiError::PlaybackProvider {
+                provider: requested_provider,
+                error: ProviderError::Unavailable(
+                    "No stream sources available across enabled providers".to_string(),
+                ),
+            });
+        }
 
-        // Caption lookup is best-effort: a subtitle service failure must not
-        // prevent the user from seeing available video releases.
-        let subtitles = if provider == ProviderKind::MovieBox {
-            let resource_id = releases
+        // Captions are collected from each MovieBox cut that contributed a release.
+        let mut subtitles: Vec<SubtitleOption> = Vec::new();
+        for source_id in provider_sources
+            .iter()
+            .filter(|source| source.provider == ProviderKind::MovieBox)
+        {
+            let Some(resource_id) = releases
                 .iter()
-                .find_map(|release| release.resource_id.as_deref());
-            if let Some(resource_id) = resource_id {
-                let sibling_ids = self
-                    .details(provider.cache_key(), &resolved_media_id)
-                    .await
-                    .map(|details| details.sibling_ids())
-                    .unwrap_or_default();
-                self.service
-                    .get_ext_captions(
-                        &resolved_media_id,
-                        resource_id,
-                        &sibling_ids,
-                        season,
-                        episode,
-                    )
-                    .await
-                    .unwrap_or_default()
-            } else {
-                Vec::new()
+                .filter(|release| release.provider == ProviderKind::MovieBox)
+                .find_map(|release| release.resource_id.clone())
+            else {
+                continue;
+            };
+            let sibling_ids = self
+                .details(source_id.provider.cache_key(), &source_id.value)
+                .await
+                .map(|details| details.sibling_ids())
+                .unwrap_or_default();
+            if let Ok(found) = self
+                .service
+                .get_ext_captions(&source_id.value, &resource_id, &sibling_ids, season, episode)
+                .await
+            {
+                for subtitle in found {
+                    if !subtitles.iter().any(|existing| existing.url == subtitle.url) {
+                        subtitles.push(subtitle);
+                    }
+                }
             }
-        } else {
-            Vec::new()
-        };
+        }
 
         Ok(MobilePlaybackResponse {
-            provider,
-            media_id: resolved_media_id,
+            provider: requested_provider,
+            media_id: media_id.to_string(),
             season,
             episode,
             releases,
             subtitles,
+            provider_sources,
         })
     }
 
@@ -395,10 +603,10 @@ impl MobileApi {
             .ok_or(MobileApiError::InvalidReleaseIndex)?;
         let mut source = self
             .service
-            .resolve_release_typed(candidates.provider, release)
+            .resolve_release_typed(release.provider, release)
             .await
             .map_err(|error| MobileApiError::PlaybackProvider {
-                provider: candidates.provider,
+                provider: release.provider,
                 error,
             })?;
 
